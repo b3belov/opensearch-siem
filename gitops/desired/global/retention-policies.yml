@@ -1,0 +1,15 @@
+apiVersion: siem.local/v1
+kind: RetentionPolicyList
+policies:
+  - name: critical-30d
+    days: 30
+    priority: critical
+  - name: standard-7d
+    days: 7
+    priority: standard
+  - name: noisy-3d
+    days: 3
+    priority: noisy
+  - name: quarantine-7d
+    days: 7
+    priority: quarantine

@@ -1,0 +1,1 @@
+"""OpenSearch SIEM scripts package."""

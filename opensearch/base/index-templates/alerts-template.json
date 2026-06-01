@@ -1,0 +1,19 @@
+{
+  "index_patterns": ["alerts-*"],
+  "template": {
+    "settings": {
+      "index.number_of_shards": 1,
+      "index.number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic": true,
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "customer.slug": { "type": "keyword" },
+        "alert.id": { "type": "keyword" },
+        "alert.severity": { "type": "keyword" }
+      }
+    }
+  },
+  "priority": 200
+}

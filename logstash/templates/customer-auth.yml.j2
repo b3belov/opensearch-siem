@@ -1,0 +1,9 @@
+customers:
+{% for customer in customers %}
+  {{ customer.slug }}:
+    enabled: {{ customer.enabled | lower }}
+    credential_ids:
+{% for credential_id in credentials[customer.slug] %}
+      - {{ credential_id }}
+{% endfor %}
+{% endfor %}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["apiVersion", "kind", "customer", "id", "name", "dataset", "parser", "retentionPolicy", "priority", "enabled"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "const": "siem.local/v1" },
+    "kind": { "const": "Source" },
+    "customer": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,40}$" },
+    "name": { "type": "string", "minLength": 1 },
+    "dataset": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,40}$" },
+    "parser": { "type": "string", "enum": ["generic-syslog", "windows-json", "passthrough"] },
+    "retentionPolicy": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,40}$" },
+    "priority": { "type": "string", "enum": ["critical", "standard", "noisy"] },
+    "dailyVolumeBudgetGb": { "type": "number", "minimum": 0 },
+    "enabled": { "type": "boolean" }
+  }
+}

@@ -1,0 +1,8 @@
+apiVersion: siem.local/v1
+kind: BackupConfig
+enabled: false
+repository:
+  type: s3
+  name: siem-snapshots
+  bucket: opensearch-siem-snapshots
+  basePath: single-vm

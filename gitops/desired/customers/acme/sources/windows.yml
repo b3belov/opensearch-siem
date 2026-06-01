@@ -1,0 +1,11 @@
+apiVersion: siem.local/v1
+kind: Source
+customer: acme
+id: windows
+name: Acme Windows events
+dataset: windows
+parser: windows-json
+retentionPolicy: standard-7d
+priority: standard
+dailyVolumeBudgetGb: 3
+enabled: true

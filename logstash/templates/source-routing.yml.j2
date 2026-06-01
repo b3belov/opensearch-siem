@@ -1,0 +1,13 @@
+sources:
+{% for source in sources %}
+  {{ source.customer }}:{{ source.id }}:
+    customer_slug: {{ source.customer }}
+    source_id: {{ source.id }}
+    dataset: {{ source.dataset }}
+    stream: logs-{{ source.customer }}-{{ source.dataset }}
+    quarantine_stream: logs-{{ source.customer }}-{{ source.dataset }}-quarantine
+    parser: {{ source.parser }}
+    retention_policy: {{ source.retention_policy }}
+    priority: {{ source.priority }}
+    enabled: {{ source.enabled | lower }}
+{% endfor %}

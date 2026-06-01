@@ -1,0 +1,23 @@
+{
+  "cluster_permissions": [
+    "cluster:monitor/main"
+  ],
+  "index_permissions": [
+{% for stream in streams %}
+    {
+      "index_patterns": [
+        "{{ stream }}",
+        "{{ stream }}-*"
+      ],
+      "allowed_actions": [
+        "indices:data/write/bulk*",
+        "indices:data/write/create",
+        "indices:data/write/index",
+        "indices:admin/create",
+        "indices:admin/mapping/put"
+      ]
+    }{% if not loop.last %},{% endif %}
+{% endfor %}
+  ],
+  "tenant_permissions": []
+}

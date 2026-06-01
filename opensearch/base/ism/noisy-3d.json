@@ -1,0 +1,22 @@
+{
+  "policy": {
+    "description": "Noisy logs retained for 3 days",
+    "default_state": "hot",
+    "states": [
+      {
+        "name": "hot",
+        "actions": [
+          { "rollover": { "min_index_age": "1d", "min_size": "10gb" } }
+        ],
+        "transitions": [
+          { "state_name": "delete", "conditions": { "min_index_age": "3d" } }
+        ]
+      },
+      {
+        "name": "delete",
+        "actions": [{ "delete": {} }],
+        "transitions": []
+      }
+    ]
+  }
+}

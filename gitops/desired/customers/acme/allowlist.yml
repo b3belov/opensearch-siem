@@ -1,0 +1,6 @@
+apiVersion: siem.local/v1
+kind: CustomerAllowlist
+customer: acme
+entries:
+  - cidr: 203.0.113.10/32
+    description: Acme primary office forwarder

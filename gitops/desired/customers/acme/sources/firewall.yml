@@ -1,0 +1,11 @@
+apiVersion: siem.local/v1
+kind: Source
+customer: acme
+id: firewall
+name: Acme firewall syslog
+dataset: firewall
+parser: generic-syslog
+retentionPolicy: critical-30d
+priority: critical
+dailyVolumeBudgetGb: 2
+enabled: true

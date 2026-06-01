@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["apiVersion", "kind", "enabled", "repository"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "const": "siem.local/v1" },
+    "kind": { "const": "BackupConfig" },
+    "enabled": { "type": "boolean" },
+    "repository": {
+      "type": "object",
+      "required": ["type", "name", "bucket", "basePath"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "s3" },
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,40}$" },
+        "bucket": { "type": "string", "minLength": 1 },
+        "basePath": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

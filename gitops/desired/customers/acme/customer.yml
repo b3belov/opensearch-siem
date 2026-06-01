@@ -1,0 +1,5 @@
+apiVersion: siem.local/v1
+kind: Customer
+slug: acme
+name: Acme Corp
+enabled: true

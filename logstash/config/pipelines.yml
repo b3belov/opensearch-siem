@@ -1,0 +1,8 @@
+- pipeline.id: relay-input
+  path.config: /usr/share/logstash/pipeline/00-relay-input.conf
+- pipeline.id: route-and-enrich
+  path.config: /usr/share/logstash/pipeline/10-route-and-enrich.conf
+- pipeline.id: normalize
+  path.config: /usr/share/logstash/pipeline/20-normalize.conf
+- pipeline.id: opensearch-output
+  path.config: /usr/share/logstash/pipeline/90-opensearch-output.conf
