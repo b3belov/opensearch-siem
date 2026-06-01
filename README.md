@@ -417,6 +417,31 @@ Ingest edge returns `413`:
 
 - The body is larger than `INGEST_EDGE_MAX_BODY_BYTES`.
 
+### Reading ingest-edge audit logs
+
+The ingest edge emits one structured key=value log line per accept or reject
+decision. Passwords and secret values are never logged — only the credential ID
+(a tenant identifier) and peer/client IP appear in the output.
+
+Sample lines:
+
+```
+2026-06-01 12:00:00 INFO ingest-edge accept customer=acme credential=acme-primary client_ip=203.0.113.10 upstream=200
+2026-06-01 12:00:01 INFO ingest-edge reject status=403 peer=203.0.113.99 credential=acme-primary reason=invalid credential
+```
+
+To filter by a specific credential:
+
+```bash
+docker compose logs ingest-edge | grep 'credential=acme-primary'
+```
+
+Common reject reasons:
+
+- `unknown credential` — the credential ID is not in the config or is disabled.
+- `invalid credential` — the credential ID exists but the password is wrong.
+- `source ip not allowed` — the resolved client IP is outside the customer CIDR allowlist.
+
 Events reach Logstash but land in quarantine:
 
 - Confirm the event includes `siem.source_id`.

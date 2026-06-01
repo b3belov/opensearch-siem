@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import secrets
 import ssl
@@ -13,6 +14,12 @@ from typing import Any, Optional, Tuple
 
 import requests
 import yaml
+
+# Audit log. Lines are key=value greppable and intentionally contain only the
+# credential ID (a tenant identifier like "acme-primary"), peer/client IP, and
+# decision — NEVER the password or secret value.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+LOG = logging.getLogger("ingest-edge")
 
 
 CONFIG_PATH = Path(os.environ.get("INGEST_EDGE_CONFIG", "/app/config/customer-auth.yml"))
@@ -137,17 +144,17 @@ class Handler(BaseHTTPRequestHandler):
         username, password = auth
         credential = config["credentials"].get(username)
         if credential is None or not credential.get("enabled", False):
-            self.reject(403, "unknown credential")
+            self.reject(403, "unknown credential", credential=username)
             return
 
         expected = secret_value(credential["secretRef"])
         if not secrets.compare_digest(password, expected):
-            self.reject(403, "invalid credential")
+            self.reject(403, "invalid credential", credential=username)
             return
 
         client_ip = client_ip_for_request(self.client_address[0], self.headers.get("X-Forwarded-For"))
         if not ip_allowed(client_ip, credential.get("allowedCidrs", [])):
-            self.reject(403, "source ip not allowed")
+            self.reject(403, "source ip not allowed", credential=username)
             return
 
         length = content_length(self.headers)
@@ -189,18 +196,27 @@ class Handler(BaseHTTPRequestHandler):
         except requests.RequestException:
             self.reject(503, "upstream logstash unavailable")
             return
+        LOG.info(
+            "accept customer=%s credential=%s client_ip=%s upstream=%s",
+            credential["customerSlug"], username, client_ip, response.status_code,
+        )
         self.send_response(response.status_code)
         self.send_header("Content-Length", str(len(response.content)))
         self.end_headers()
         self.wfile.write(response.content)
 
-    def reject(self, status: int, message: str) -> None:
+    def reject(self, status: int, message: str, credential: str = "-") -> None:
+        peer = getattr(self, "client_address", ("-",))[0]
+        LOG.info("reject status=%s peer=%s credential=%s reason=%s", status, peer, credential, message)
         body = json.dumps({"error": message}).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        return
 
 
 def main() -> None:

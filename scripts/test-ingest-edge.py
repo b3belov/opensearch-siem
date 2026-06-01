@@ -253,3 +253,17 @@ def test_unknown_get_path_returns_404() -> None:
     handler.end_headers = lambda: None
     handler.do_GET()
     assert calls == [404]
+
+
+def test_reject_emits_audit_log(monkeypatch, caplog) -> None:
+    import logging
+    handler = object.__new__(app.Handler)
+    handler.client_address = ("203.0.113.99", 5555)
+    handler.wfile = SimpleNamespace(write=lambda b: None)
+    handler.send_response = lambda status: None
+    handler.send_header = lambda k, v: None
+    handler.end_headers = lambda: None
+    with caplog.at_level(logging.INFO, logger="ingest-edge"):
+        handler.reject(403, "unknown credential")
+    assert any("403" in r.message and "unknown credential" in r.message
+               for r in caplog.records)
