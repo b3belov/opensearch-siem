@@ -142,7 +142,7 @@ def test_secret_value_caches_and_refreshes_on_mtime(tmp_path, monkeypatch) -> No
 
 
 def _run_accepted_post(monkeypatch, body: bytes):
-    forwarded: dict = {}
+    forwarded: dict = {"json": None}
 
     class FakeResp:
         status_code = 200
@@ -188,3 +188,30 @@ def test_enrichment_strips_spoofed_fields(monkeypatch) -> None:
     assert out["siem"]["credential_id"] == "acme-primary"
     assert out["siem"]["ingest_edge_client_ip"] == "203.0.113.10"
     assert out["message"] == "hi"
+    assert set(out["siem"].keys()) == {"source_id", "credential_id", "ingest_edge_client_ip"}
+
+
+def test_enrichment_absent_siem_field(monkeypatch) -> None:
+    """No siem key in payload — source_id should be absent from result."""
+    body = json.dumps({"message": "hi"}).encode()
+    out = _run_accepted_post(monkeypatch, body)
+    assert out["customer"] == {"slug": "acme"}
+    assert "siem" in out
+    assert "source_id" not in out["siem"]
+    assert out["siem"]["credential_id"] == "acme-primary"
+
+
+def test_enrichment_empty_source_id_omitted(monkeypatch) -> None:
+    """Empty string source_id should NOT be forwarded."""
+    body = json.dumps({"siem": {"source_id": ""}}).encode()
+    out = _run_accepted_post(monkeypatch, body)
+    assert "source_id" not in out["siem"]
+
+
+def test_enrichment_non_dict_siem_handled(monkeypatch) -> None:
+    """Non-dict siem (e.g. null or integer) should not raise — source_id absent."""
+    for bad_siem in [None, 99, "string"]:
+        body = json.dumps({"siem": bad_siem, "message": "test"}).encode()
+        out = _run_accepted_post(monkeypatch, body)
+        assert "source_id" not in out["siem"]
+        assert out["customer"] == {"slug": "acme"}
