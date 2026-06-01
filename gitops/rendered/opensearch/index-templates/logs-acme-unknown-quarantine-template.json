@@ -23,6 +23,9 @@
             "dataset": {
               "type": "keyword"
             },
+            "ingested": {
+              "type": "date"
+            },
             "original": {
               "type": "wildcard"
             }
