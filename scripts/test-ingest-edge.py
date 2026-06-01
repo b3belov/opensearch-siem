@@ -82,7 +82,7 @@ def test_upstream_failure_returns_503(monkeypatch: pytest.MonkeyPatch) -> None:
         }
     })
     monkeypatch.setattr(app, "secret_value", lambda secret_ref: "secret")
-    monkeypatch.setattr(app.requests, "post", raise_request_error)
+    monkeypatch.setattr(app.SESSION, "post", raise_request_error)
 
     handler.do_POST()
     assert calls[0] == (503, "response")
@@ -167,7 +167,7 @@ def _run_accepted_post(monkeypatch, body: bytes):
             "secretRef": "secrets/local/customer-acme-password",
             "customerSlug": "acme", "allowedCidrs": ["203.0.113.10/32"]}}})
     monkeypatch.setattr(app, "secret_value", lambda ref: "secret")
-    monkeypatch.setattr(app.requests, "post", fake_post)  # patch requests.post directly on the module
+    monkeypatch.setattr(app.SESSION, "post", fake_post)  # patch SESSION.post on the shared session instance
     handler.do_POST()
     return forwarded["json"]
 
@@ -280,3 +280,18 @@ def test_accept_emits_audit_log(monkeypatch, caplog) -> None:
         and "acme-primary" in r.getMessage()
         for r in caplog.records
     )
+
+
+def test_bounded_server_semaphore_size() -> None:
+    server = app.BoundedThreadingHTTPServer(
+        ("127.0.0.1", 0), app.Handler, max_concurrency=7
+    )
+    try:
+        assert server._semaphore._value == 7
+    finally:
+        server.server_close()
+
+
+def test_module_uses_shared_session() -> None:
+    import requests as _requests
+    assert isinstance(app.SESSION, _requests.Session)

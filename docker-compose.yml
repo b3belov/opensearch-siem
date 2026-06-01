@@ -1,0 +1,122 @@
+services:
+  opensearch:
+    image: opensearchproject/opensearch:3.6.0
+    container_name: opensearch
+    restart: unless-stopped
+    environment:
+      - cluster.name=opensearch-siem
+      - node.name=opensearch
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=${OPENSEARCH_JAVA_OPTS:--Xms2g -Xmx2g}
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./data/opensearch:/usr/share/opensearch/data
+    ports:
+      - "127.0.0.1:9200:9200"
+    networks:
+      - siem-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sku admin:${OPENSEARCH_ADMIN_PASSWORD} https://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 20s
+      timeout: 10s
+      retries: 12
+      start_period: 120s
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:3.6.0
+    container_name: opensearch-dashboards
+    restart: unless-stopped
+    environment:
+      - OPENSEARCH_HOSTS=["https://opensearch:9200"]
+      - OPENSEARCH_USERNAME=admin
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD}
+      - DATA_SOURCE_ENABLED=true
+      - WORKSPACE_ENABLED=true
+      - EXPLORE_ENABLED=true
+    ports:
+      - "127.0.0.1:5601:5601"
+    networks:
+      - siem-net
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+  central-logstash:
+    image: opensearchproject/logstash-oss-with-opensearch-output-plugin:8.9.0
+    container_name: central-logstash
+    restart: unless-stopped
+    environment:
+      - LS_JAVA_OPTS=-Xms2g -Xmx2g
+      - LOGSTASH_WRITER_USER=${LOGSTASH_WRITER_USER}
+      - LOGSTASH_WRITER_PASSWORD=${LOGSTASH_WRITER_PASSWORD}
+    volumes:
+      - ./logstash/config:/usr/share/logstash/config:ro
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./gitops/rendered/logstash:/usr/share/logstash/gitops:ro
+      - ./data/logstash:/usr/share/logstash/data
+    expose:
+      - "9601"
+    networks:
+      - siem-net
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+  ingest-edge:
+    build:
+      context: .
+      dockerfile: ingest-edge/Dockerfile
+    container_name: ingest-edge
+    restart: unless-stopped
+    environment:
+      - LOGSTASH_URL=http://central-logstash:9601
+      - INGEST_EDGE_CONFIG=/app/config/customer-auth.yml
+      - INGEST_EDGE_SECRET_ROOT=/run/siem-secrets
+      - INGEST_EDGE_TLS_CERT=/run/siem-certs/central.crt
+      - INGEST_EDGE_TLS_KEY=/run/siem-certs/central.key
+      - INGEST_EDGE_MAX_BODY_BYTES=1048576
+      - INGEST_EDGE_MAX_CONCURRENCY=64
+      - TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS:-}
+    volumes:
+      - ./gitops/rendered/ingest-edge:/app/config:ro
+      - ./secrets/local:/run/siem-secrets:ro
+      - ./secrets/certs:/run/siem-certs:ro
+    ports:
+      - "5044:5044/tcp"
+    networks:
+      - siem-net
+    depends_on:
+      - central-logstash
+
+  backup-job:
+    build:
+      context: .
+      dockerfile: backup/Dockerfile
+    profiles:
+      - backup
+    environment:
+      - BACKUP_ENABLED=${BACKUP_ENABLED:-false}
+      - OPENSEARCH_URL=https://opensearch:9200
+      - OPENSEARCH_USER=${BACKUP_USER:-admin}
+      - OPENSEARCH_PASSWORD=${BACKUP_PASSWORD:-}
+      - SNAPSHOT_REPOSITORY=${SNAPSHOT_REPOSITORY:-siem-snapshots}
+    volumes:
+      - ./:/repo:ro
+      - ./data/backups:/backup
+    networks:
+      - siem-net
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+networks:
+  siem-net:
+    driver: bridge

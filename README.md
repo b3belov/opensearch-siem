@@ -417,6 +417,11 @@ Ingest edge returns `413`:
 
 - The body is larger than `INGEST_EDGE_MAX_BODY_BYTES`.
 
+`INGEST_EDGE_MAX_CONCURRENCY` (default `64`) bounds the number of concurrent
+ingest-edge request threads. Each thread does a blocking, connection-pooled POST
+to Logstash. If Logstash per-event latency spikes (>100 ms), lower it to `32`;
+raise it only if the host has spare CPU and Logstash keeps up.
+
 ### Reading ingest-edge audit logs
 
 The ingest edge emits one structured key=value log line per accept or reject

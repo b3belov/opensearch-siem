@@ -12,14 +12,22 @@ from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
+import threading
+
 import requests
 import yaml
+from requests.adapters import HTTPAdapter
 
 # Audit log. Lines are key=value greppable and intentionally contain only the
 # credential ID (a tenant identifier like "acme-primary"), peer/client IP, and
 # decision — NEVER the password or secret value.
 LOG = logging.getLogger("ingest-edge")
 
+MAX_CONCURRENCY = int(os.environ.get("INGEST_EDGE_MAX_CONCURRENCY", "64"))
+
+SESSION = requests.Session()
+SESSION.mount("http://", HTTPAdapter(pool_connections=MAX_CONCURRENCY, pool_maxsize=MAX_CONCURRENCY))
+SESSION.mount("https://", HTTPAdapter(pool_connections=MAX_CONCURRENCY, pool_maxsize=MAX_CONCURRENCY))
 
 CONFIG_PATH = Path(os.environ.get("INGEST_EDGE_CONFIG", "/app/config/customer-auth.yml"))
 SECRET_ROOT = Path(os.environ.get("INGEST_EDGE_SECRET_ROOT", "/run/siem-secrets"))
@@ -191,7 +199,7 @@ class Handler(BaseHTTPRequestHandler):
         event["siem"] = siem
 
         try:
-            response = requests.post(LOGSTASH_URL, json=event, timeout=10)
+            response = SESSION.post(LOGSTASH_URL, json=event, timeout=10)
         except requests.RequestException:
             self.reject(503, "upstream logstash unavailable")
             return
@@ -220,6 +228,24 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, *args: Any, max_concurrency: int, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._semaphore = threading.BoundedSemaphore(max_concurrency)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        self._semaphore.acquire()
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._semaphore.release()
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -227,10 +253,11 @@ def main() -> None:
     )
     host = os.environ.get("INGEST_EDGE_HOST", "0.0.0.0")
     port = int(os.environ.get("INGEST_EDGE_PORT", "5044"))
-    server = ThreadingHTTPServer((host, port), Handler)
+    server = BoundedThreadingHTTPServer((host, port), Handler, max_concurrency=MAX_CONCURRENCY)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certfile=TLS_CERT_PATH, keyfile=TLS_KEY_PATH)
     server.socket = context.wrap_socket(server.socket, server_side=True)
+    LOG.info("ingest-edge listening host=%s port=%s max_concurrency=%s", host, port, MAX_CONCURRENCY)
     server.serve_forever()
 
 
