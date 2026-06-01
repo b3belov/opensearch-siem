@@ -64,6 +64,8 @@ services:
       - ./data/logstash:/usr/share/logstash/data
     expose:
       - "9601"
+    ports:
+      - "127.0.0.1:9600:9600"
     networks:
       - siem-net
     depends_on:
