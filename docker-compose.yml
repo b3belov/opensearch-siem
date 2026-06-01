@@ -19,6 +19,12 @@ services:
         hard: 65536
     volumes:
       - ./data/opensearch:/usr/share/opensearch/data
+      - ./opensearch/config/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro
+      - ./secrets/certs/opensearch.crt:/usr/share/opensearch/config/certs/opensearch.crt:ro
+      - ./secrets/certs/opensearch.key:/usr/share/opensearch/config/certs/opensearch.key:ro
+      - ./secrets/certs/root-ca.crt:/usr/share/opensearch/config/certs/root-ca.crt:ro
+      - ./secrets/certs/admin.crt:/usr/share/opensearch/config/certs/admin.crt:ro
+      - ./secrets/certs/admin.key:/usr/share/opensearch/config/certs/admin.key:ro
     ports:
       - "127.0.0.1:9200:9200"
     networks:
