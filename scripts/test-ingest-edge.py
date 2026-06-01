@@ -231,14 +231,16 @@ def test_client_ip_returns_peer_when_peer_untrusted(monkeypatch) -> None:
 
 def test_health_endpoint_returns_200() -> None:
     calls: list[int] = []
+    written: list[bytes] = []
     handler = object.__new__(app.Handler)
     handler.path = "/health"
-    handler.wfile = SimpleNamespace(write=lambda b: None)
+    handler.wfile = SimpleNamespace(write=lambda b: written.append(b))
     handler.send_response = lambda status: calls.append(status)
     handler.send_header = lambda k, v: None
     handler.end_headers = lambda: None
     handler.do_GET()
     assert calls == [200]
+    assert written == [b'{"status":"ok"}']
 
 
 def test_unknown_get_path_returns_404() -> None:
