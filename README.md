@@ -1,0 +1,437 @@
+# OpenSearch SIEM
+
+Single-VM, multi-customer OpenSearch SIEM stack managed through GitOps. The
+repository contains the central Docker Compose deployment, GitOps desired state,
+rendered runtime configuration, an HTTPS ingest edge, Logstash routing pipelines,
+OpenSearch templates and ISM policies, relay bundle generation, and local
+validation scripts.
+
+## What Runs
+
+The default Compose stack starts these central services:
+
+- `opensearch`: single-node OpenSearch 3.6.0 cluster for logs, alerts, templates,
+  ISM policies, and security objects.
+- `opensearch-dashboards`: internal Dashboards UI bound to localhost on port
+  `5601`.
+- `central-logstash`: persistent-queue Logstash pipeline that accepts events from
+  the ingest edge, validates source metadata, routes events, and writes to
+  OpenSearch.
+- `ingest-edge`: HTTPS listener on TCP `5044` that authenticates customer relay
+  credentials, enforces CIDR allowlists, injects trusted customer metadata, and
+  forwards accepted JSON events to Logstash.
+- `backup-job`: optional backup profile for repository and OpenSearch snapshot
+  work once backup storage is configured.
+
+The version-one architecture is intentionally one OpenSearch node on one VM.
+Multiple OpenSearch containers on the same VM share the same CPU, memory, disk,
+and failure domain, so this project spends resources on heap, filesystem cache,
+persistent queues, shard control, and retention instead.
+
+## Repository Layout
+
+```text
+docker-compose.yml                 Central runtime stack
+docs/opensearch-siem-operations.md Operator notes and first-start command chain
+gitops/desired/                    Human-edited source of truth
+gitops/rendered/                   Generated runtime artifacts mounted by services
+gitops/schemas/                    JSON schemas for desired-state validation
+ingest-edge/                       HTTPS ingest edge service
+logstash/config/                   Logstash process configuration
+logstash/pipeline/                 Central ingest, routing, normalization, output
+opensearch/base/                   Base OpenSearch templates, ISM policies, roles
+relay/templates/                   Customer-local Logstash relay templates
+scripts/                           Validation, rendering, reconcile, relay helpers
+data/                              Local runtime state, ignored by git
+secrets/                           Local generated secrets and certs, ignored by git
+```
+
+## Prerequisites
+
+Install these on the Docker host:
+
+- Docker Engine or Docker Desktop with Compose v2.
+- Python 3.11 or newer.
+- `openssl`.
+- `bash`, `curl`, and standard Unix shell tools.
+
+Set the OpenSearch kernel prerequisite on Linux hosts:
+
+```bash
+sudo sysctl -w vm.max_map_count=262144
+echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-opensearch.conf
+sudo sysctl --system
+```
+
+For a small local run, the default OpenSearch heap is `-Xms2g -Xmx2g`. On a
+sized VM, override `OPENSEARCH_JAVA_OPTS` in `.env`, for example
+`-Xms12g -Xmx12g`, and leave enough memory for the OS page cache, Logstash, and
+Dashboards.
+
+## Local Setup
+
+Create and populate a Python virtual environment:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-gitops.txt
+pip install -r ingest-edge/requirements.txt
+```
+
+Generate local secrets, TLS material, ignored runtime directories, and `.env`:
+
+```bash
+bash scripts/setup-local-secrets.sh
+```
+
+The setup script creates:
+
+- `.env`
+- `secrets/local/opensearch-admin-password`
+- `secrets/local/logstash-writer-password`
+- `secrets/local/customer-acme-password`
+- `secrets/certs/central.crt`
+- `secrets/certs/central.key`
+- `secrets/certs/central-ca.crt`
+- `data/opensearch/`
+- `data/logstash/`
+- `data/backups/`
+
+These paths are intentionally ignored by git. Do not commit generated secrets,
+private keys, relay bundles, local data, or `.env`.
+
+## Validate And Render GitOps Config
+
+Desired state lives under `gitops/desired/**`. Runtime services mount
+`gitops/rendered/**`, so render after every desired-state change.
+
+```bash
+PYTHON=.venv/bin/python bash scripts/test-gitops-config.sh
+.venv/bin/python scripts/render-gitops-config.py
+PYTHON=.venv/bin/python bash scripts/test-rendered-gitops-config.sh
+```
+
+The default sample customer is `acme`, with sources such as `firewall` and
+`windows`. Generated stream names follow the pattern:
+
+```text
+logs-<customer_slug>-<dataset>
+logs-<customer_slug>-<dataset>-quarantine
+alerts-<customer_slug>
+```
+
+Examples:
+
+```text
+logs-acme-firewall
+logs-acme-windows
+logs-acme-unknown-quarantine
+alerts-acme
+```
+
+## Start The Stack
+
+Validate Compose first:
+
+```bash
+docker compose config --quiet
+```
+
+Start OpenSearch and wait for it to become healthy:
+
+```bash
+docker compose up -d opensearch
+docker compose ps
+```
+
+Load `.env` into your shell and apply OpenSearch-managed GitOps objects:
+
+```bash
+set -a
+. ./.env
+set +a
+
+OPENSEARCH_URL=https://127.0.0.1:9200 \
+OPENSEARCH_USER=admin \
+OPENSEARCH_PASSWORD="$OPENSEARCH_ADMIN_PASSWORD" \
+  .venv/bin/python scripts/reconcile-opensearch-gitops.py --dry-run
+
+OPENSEARCH_URL=https://127.0.0.1:9200 \
+OPENSEARCH_USER=admin \
+OPENSEARCH_PASSWORD="$OPENSEARCH_ADMIN_PASSWORD" \
+  .venv/bin/python scripts/reconcile-opensearch-gitops.py
+```
+
+Start the remaining services:
+
+```bash
+docker compose up -d opensearch-dashboards central-logstash ingest-edge
+docker compose ps
+```
+
+Open local services:
+
+- OpenSearch API: `https://127.0.0.1:9200`
+- OpenSearch Dashboards: `http://127.0.0.1:5601`
+- Ingest edge: `https://<host>:5044`
+
+Dashboards uses the OpenSearch `admin` user. The password is the value of
+`OPENSEARCH_ADMIN_PASSWORD` in `.env`.
+
+## Send A Test Event
+
+The ingest edge accepts HTTPS `POST` requests with Basic auth. The username is a
+credential ID from `gitops/desired/customers/<customer>/credentials.yml`; the
+password is read from the referenced file under `secrets/local/`.
+
+For the sample `acme` customer, the credential ID is `acme-primary` and the
+password is in `secrets/local/customer-acme-password`.
+
+The customer allowlist is enforced before forwarding to Logstash. For real use,
+set the customer forwarder IPs in
+`gitops/desired/customers/<customer>/allowlist.yml`, render the GitOps config,
+and restart `ingest-edge`. For local manual tests, temporarily allow the source
+IP that Docker presents to the container, then render and restart.
+
+Example event shape:
+
+```json
+{
+  "siem": {
+    "source_id": "firewall"
+  },
+  "message": "test event"
+}
+```
+
+Example request:
+
+```bash
+curl -k \
+  -u "acme-primary:$(cat secrets/local/customer-acme-password)" \
+  -H 'Content-Type: application/json' \
+  https://127.0.0.1:5044/ \
+  -d '{"siem":{"source_id":"firewall"},"message":"test event"}'
+```
+
+Accepted events are enriched with trusted `customer.slug`,
+`siem.credential_id`, and `siem.ingest_edge_client_ip` before Logstash routes
+them. Events with missing, unknown, or disabled `siem.source_id` are sent to the
+customer unknown-quarantine stream.
+
+## Customer Relay Bundles
+
+Generate a customer-local Logstash relay bundle from the GitOps customer
+metadata:
+
+```bash
+PYTHON=.venv/bin/python bash scripts/generate-relay-bundle.sh acme
+```
+
+The bundle is written to `relay/bundles/acme/` and includes:
+
+- `logstash.yml`
+- `pipeline.conf`
+- `README.md`
+
+Install the central CA certificate from `secrets/certs/central-ca.crt` on the
+customer relay host at the path expected by the generated relay pipeline, set
+`CUSTOMER_FORWARDER_PASSWORD`, and start the customer-local Logstash forwarder.
+Relay bundles are ignored by git because they may contain deployment-specific
+material.
+
+## GitOps Change Flow
+
+Use this flow for customer, source, credential metadata, allowlist, retention,
+or backup configuration changes:
+
+1. Edit files under `gitops/desired/**`.
+2. Validate desired state:
+
+   ```bash
+   PYTHON=.venv/bin/python bash scripts/test-gitops-config.sh
+   ```
+
+3. Render runtime artifacts:
+
+   ```bash
+   .venv/bin/python scripts/render-gitops-config.py
+   ```
+
+4. Review generated changes under `gitops/rendered/**`.
+5. Dry-run the OpenSearch reconciler:
+
+   ```bash
+   set -a
+   . ./.env
+   set +a
+
+   OPENSEARCH_URL=https://127.0.0.1:9200 \
+   OPENSEARCH_USER=admin \
+   OPENSEARCH_PASSWORD="$OPENSEARCH_ADMIN_PASSWORD" \
+     .venv/bin/python scripts/reconcile-opensearch-gitops.py --dry-run
+   ```
+
+6. Apply when ready:
+
+   ```bash
+   OPENSEARCH_URL=https://127.0.0.1:9200 \
+   OPENSEARCH_USER=admin \
+   OPENSEARCH_PASSWORD="$OPENSEARCH_ADMIN_PASSWORD" \
+     .venv/bin/python scripts/reconcile-opensearch-gitops.py
+   ```
+
+7. Restart services that mount rendered files when those files change:
+
+   ```bash
+   docker compose restart central-logstash ingest-edge
+   ```
+
+## Validation Commands
+
+Run the focused checks before changing runtime configuration:
+
+```bash
+PYTHON=.venv/bin/python bash scripts/test-gitops-config.sh
+PYTHON=.venv/bin/python bash scripts/test-rendered-gitops-config.sh
+PYTHON=.venv/bin/python bash scripts/test-opensearch-reconciler.sh
+PYTHON=.venv/bin/python bash scripts/test-ingest-edge.sh
+bash scripts/test-target-compose.sh
+bash scripts/test-secret-ignore.sh
+bash scripts/test-relay-bundle.sh
+bash scripts/test-logstash-config.sh
+```
+
+`scripts/test-logstash-config.sh` and parts of `scripts/test-ingest-edge.sh`
+use Docker when Docker is available. They skip Docker-backed validation when the
+Docker daemon is not reachable.
+
+## Backup Profile
+
+Backups are disabled by default:
+
+```text
+BACKUP_ENABLED=false
+```
+
+When backup storage and credentials are ready, configure the backup values in
+`.env` or the host environment, then run the backup profile:
+
+```bash
+docker compose --profile backup run --rm backup-job
+```
+
+Until external snapshot storage is configured and tested, VM or disk loss can
+destroy SIEM data.
+
+## Common Operations
+
+Check container state:
+
+```bash
+docker compose ps
+```
+
+Tail logs:
+
+```bash
+docker compose logs -f opensearch
+docker compose logs -f opensearch-dashboards
+docker compose logs -f central-logstash
+docker compose logs -f ingest-edge
+```
+
+Restart runtime services after rendered config changes:
+
+```bash
+docker compose restart central-logstash ingest-edge
+```
+
+### Check ingest-edge health
+
+```bash
+curl -k https://127.0.0.1:5044/health
+```
+
+Returns `{"status":"ok"}` when the listener is up. Used by the container healthcheck.
+
+Stop the stack:
+
+```bash
+docker compose down
+```
+
+Remove local runtime data only when you intentionally want a fresh cluster:
+
+```bash
+docker compose down
+rm -rf data/opensearch data/logstash data/backups
+bash scripts/setup-local-secrets.sh
+```
+
+## Security Notes
+
+- Keep OpenSearch and Dashboards bound to localhost unless a trusted reverse
+  proxy or VPN is in front of them.
+- Protect TCP `5044` with host firewall rules. The app-level customer CIDR
+  allowlist is an additional control, not a replacement for network policy.
+- Set `TRUSTED_PROXY_CIDRS` only to CIDRs of reverse proxies you control. The
+  ingest edge trusts `X-Forwarded-For` only from those proxy addresses.
+- Customer identity is assigned from the authenticated credential mapping, not
+  from event payload fields.
+- Customer slugs are part of stream names. Treat them as immutable after data is
+  written.
+- Do not commit `.env`, generated secrets, certificates, relay bundles, or local
+  data.
+
+## Troubleshooting
+
+OpenSearch fails to start with memory-map errors:
+
+- Confirm `vm.max_map_count=262144` on the host.
+
+OpenSearch healthcheck does not become healthy:
+
+- Check `docker compose logs opensearch`.
+- Confirm `.env` exists and contains `OPENSEARCH_ADMIN_PASSWORD`.
+- Confirm `OPENSEARCH_JAVA_OPTS` fits available host memory.
+
+Dashboards cannot log in:
+
+- Use username `admin`.
+- Use `OPENSEARCH_ADMIN_PASSWORD` from `.env`.
+- Confirm OpenSearch is healthy before starting Dashboards.
+
+Ingest edge returns `401`:
+
+- The request is missing Basic auth.
+
+Ingest edge returns `403`:
+
+- The credential ID is unknown or disabled.
+- The password does not match the referenced secret file.
+- The source IP is not in the customer allowlist.
+
+Ingest edge returns `413`:
+
+- The body is larger than `INGEST_EDGE_MAX_BODY_BYTES`.
+
+Events reach Logstash but land in quarantine:
+
+- Confirm the event includes `siem.source_id`.
+- Confirm the source exists and is enabled under
+  `gitops/desired/customers/<customer>/sources/`.
+- Re-render GitOps config and restart `central-logstash`.
+
+Rendered artifacts are stale:
+
+- Run `.venv/bin/python scripts/render-gitops-config.py`.
+- Review `gitops/rendered/**`.
+- Re-run `PYTHON=.venv/bin/python bash scripts/test-rendered-gitops-config.sh`.
+
+## More Detail
+
+- [OpenSearch SIEM Operations](docs/opensearch-siem-operations.md)
+- [OpenSearch SIEM GitOps](gitops/README.md)
+- [Single-VM architecture design](docs/superpowers/specs/2026-05-25-opensearch-siem-single-vm-architecture-design.md)

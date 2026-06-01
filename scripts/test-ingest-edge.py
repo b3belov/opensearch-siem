@@ -227,3 +227,27 @@ def test_client_ip_walks_from_right_skipping_trusted(monkeypatch) -> None:
 def test_client_ip_returns_peer_when_peer_untrusted(monkeypatch) -> None:
     monkeypatch.setattr(app, "TRUSTED_PROXY_CIDRS", ["10.0.0.0/24"])
     assert app.client_ip_for_request("203.0.113.10", "1.1.1.1") == "203.0.113.10"
+
+
+def test_health_endpoint_returns_200() -> None:
+    calls: list[int] = []
+    handler = object.__new__(app.Handler)
+    handler.path = "/health"
+    handler.wfile = SimpleNamespace(write=lambda b: None)
+    handler.send_response = lambda status: calls.append(status)
+    handler.send_header = lambda k, v: None
+    handler.end_headers = lambda: None
+    handler.do_GET()
+    assert calls == [200]
+
+
+def test_unknown_get_path_returns_404() -> None:
+    calls: list[int] = []
+    handler = object.__new__(app.Handler)
+    handler.path = "/"
+    handler.wfile = SimpleNamespace(write=lambda b: None)
+    handler.send_response = lambda status: calls.append(status)
+    handler.send_header = lambda k, v: None
+    handler.end_headers = lambda: None
+    handler.do_GET()
+    assert calls == [404]

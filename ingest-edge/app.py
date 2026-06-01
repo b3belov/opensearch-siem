@@ -116,6 +116,17 @@ def content_length(headers: Any) -> Optional[int]:
 class Handler(BaseHTTPRequestHandler):
     server_version = "OpenSearchSIEMIngestEdge/1.0"
 
+    def do_GET(self) -> None:
+        if self.path == "/health":
+            body = b'{"status":"ok"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.reject(404, "not found")
+
     def do_POST(self) -> None:
         config = load_config()
         auth = parse_basic_auth(self.headers.get("Authorization"))
