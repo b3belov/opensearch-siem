@@ -1,0 +1,7 @@
+streams:
+- alerts-acme
+- logs-acme-firewall
+- logs-acme-firewall-quarantine
+- logs-acme-unknown-quarantine
+- logs-acme-windows
+- logs-acme-windows-quarantine

@@ -1,0 +1,5 @@
+customers:
+  acme:
+    enabled: true
+    credential_ids:
+      - acme-primary

@@ -1,0 +1,7 @@
+credentials:
+  acme-primary:
+    allowedCidrs:
+    - 203.0.113.10/32
+    customerSlug: acme
+    enabled: true
+    secretRef: secrets/local/customer-acme-password

@@ -1,0 +1,80 @@
+{
+  "cluster_permissions": [
+    "cluster:monitor/main"
+  ],
+  "index_permissions": [
+    {
+      "index_patterns": [
+        "alerts-acme",
+        "alerts-acme-*"
+      ],
+      "allowed_actions": [
+        "indices:data/write/bulk*",
+        "indices:data/write/create",
+        "indices:data/write/index",
+        "indices:admin/create",
+        "indices:admin/mapping/put"
+      ]
+    },    {
+      "index_patterns": [
+        "logs-acme-firewall",
+        "logs-acme-firewall-*"
+      ],
+      "allowed_actions": [
+        "indices:data/write/bulk*",
+        "indices:data/write/create",
+        "indices:data/write/index",
+        "indices:admin/create",
+        "indices:admin/mapping/put"
+      ]
+    },    {
+      "index_patterns": [
+        "logs-acme-firewall-quarantine",
+        "logs-acme-firewall-quarantine-*"
+      ],
+      "allowed_actions": [
+        "indices:data/write/bulk*",
+        "indices:data/write/create",
+        "indices:data/write/index",
+        "indices:admin/create",
+        "indices:admin/mapping/put"
+      ]
+    },    {
+      "index_patterns": [
+        "logs-acme-unknown-quarantine",
+        "logs-acme-unknown-quarantine-*"
+      ],
+      "allowed_actions": [
+        "indices:data/write/bulk*",
+        "indices:data/write/create",
+        "indices:data/write/index",
+        "indices:admin/create",
+        "indices:admin/mapping/put"
+      ]
+    },    {
+      "index_patterns": [
+        "logs-acme-windows",
+        "logs-acme-windows-*"
+      ],
+      "allowed_actions": [
+        "indices:data/write/bulk*",
+        "indices:data/write/create",
+        "indices:data/write/index",
+        "indices:admin/create",
+        "indices:admin/mapping/put"
+      ]
+    },    {
+      "index_patterns": [
+        "logs-acme-windows-quarantine",
+        "logs-acme-windows-quarantine-*"
+      ],
+      "allowed_actions": [
+        "indices:data/write/bulk*",
+        "indices:data/write/create",
+        "indices:data/write/index",
+        "indices:admin/create",
+        "indices:admin/mapping/put"
+      ]
+    }  ],
+  "tenant_permissions": []
+}

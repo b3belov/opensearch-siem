@@ -1,0 +1,26 @@
+{% for source in sources %}
+input {
+  syslog {
+    port => {{ source.port }}
+    type => "{{ source.id }}"
+    add_field => {
+      "[customer][slug]" => "{{ customer_slug }}"
+      "[siem][source_id]" => "{{ source.id }}"
+      "[event][dataset]" => "{{ source.dataset }}"
+    }
+  }
+}
+{% endfor %}
+
+output {
+  http {
+    url => "{{ central_url }}"
+    http_method => "post"
+    format => "json"
+    content_type => "application/json"
+    user => "{{ credential_id }}"
+    password => "${CUSTOMER_FORWARDER_PASSWORD}"
+    ssl_verification_mode => "full"
+    ssl_certificate_authorities => ["/usr/share/logstash/config/certs/central-ca.crt"]
+  }
+}

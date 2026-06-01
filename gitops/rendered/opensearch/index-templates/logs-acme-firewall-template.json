@@ -1,0 +1,46 @@
+{
+  "data_stream": {},
+  "index_patterns": [
+    "logs-acme-firewall"
+  ],
+  "priority": 300,
+  "template": {
+    "mappings": {
+      "dynamic": true,
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "customer": {
+          "properties": {
+            "slug": {
+              "type": "keyword"
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "dataset": {
+              "type": "keyword"
+            },
+            "original": {
+              "type": "wildcard"
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "id": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    },
+    "settings": {
+      "index.number_of_replicas": 0,
+      "index.number_of_shards": 1,
+      "plugins.index_state_management.policy_id": "critical-30d"
+    }
+  }
+}
