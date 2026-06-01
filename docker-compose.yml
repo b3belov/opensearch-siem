@@ -72,7 +72,7 @@ services:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
       - ./gitops/rendered/logstash:/usr/share/logstash/gitops:ro
       - ./data/logstash:/usr/share/logstash/data
-      - ./secrets/certs/root-ca.crt:/usr/share/logstash/config/certs/root-ca.crt:ro
+      - ./secrets/certs/root-ca.crt:/usr/share/logstash/certs/root-ca.crt:ro
     expose:
       - "9601"
     ports:
