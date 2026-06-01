@@ -2,7 +2,7 @@
 
 **Plan:** [2026-05-25-opensearch-siem-improvements.md](./2026-05-25-opensearch-siem-improvements.md)
 **Status:** in-progress
-**Verified at commit:** abbc02251ebe173323964b65e4adaa4dd0ebdb34
+**Verified at commit:** 335e0aba7687292153d1e98c74c96160b6b87bde
 
 ---
 
@@ -201,4 +201,4 @@
 
 ### Iteration summary
 - Findings raised: 15 (after triage) | applied: 15 | rejected: 1 | deferred: 4
-- Plan commit: (recorded at commit time)
+- Plan commit: 335e0aba7687292153d1e98c74c96160b6b87bde
