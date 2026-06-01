@@ -89,7 +89,15 @@ def client_ip_for_request(peer_ip: str, forwarded_for: Optional[str]) -> str:
         return peer_ip
     if not forwarded_for:
         return peer_ip
-    return forwarded_for.split(",", 1)[0].strip()
+    hops = [hop.strip() for hop in forwarded_for.split(",") if hop.strip()]
+    for hop in reversed(hops):
+        try:
+            if ip_allowed(hop, TRUSTED_PROXY_CIDRS):
+                continue
+        except ValueError:
+            return peer_ip
+        return hop
+    return peer_ip
 
 
 def content_length(headers: Any) -> Optional[int]:

@@ -215,3 +215,15 @@ def test_enrichment_non_dict_siem_handled(monkeypatch) -> None:
         out = _run_accepted_post(monkeypatch, body)
         assert "source_id" not in out["siem"]
         assert out["customer"] == {"slug": "acme"}
+
+
+def test_client_ip_walks_from_right_skipping_trusted(monkeypatch) -> None:
+    monkeypatch.setattr(app, "TRUSTED_PROXY_CIDRS", ["10.0.0.0/24"])
+    # peer is trusted proxy; XFF lists spoofed client then real client then trusted hop
+    result = app.client_ip_for_request("10.0.0.5", "1.1.1.1, 203.0.113.10, 10.0.0.9")
+    assert result == "203.0.113.10"
+
+
+def test_client_ip_returns_peer_when_peer_untrusted(monkeypatch) -> None:
+    monkeypatch.setattr(app, "TRUSTED_PROXY_CIDRS", ["10.0.0.0/24"])
+    assert app.client_ip_for_request("203.0.113.10", "1.1.1.1") == "203.0.113.10"
