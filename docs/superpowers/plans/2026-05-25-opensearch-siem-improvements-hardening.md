@@ -1,7 +1,7 @@
 # Hardening Ledger: 2026-05-25-opensearch-siem-improvements
 
 **Plan:** [2026-05-25-opensearch-siem-improvements.md](./2026-05-25-opensearch-siem-improvements.md)
-**Status:** in-progress
+**Status:** stopped-by-user
 **Verified at commit:** 335e0aba7687292153d1e98c74c96160b6b87bde
 
 ---
