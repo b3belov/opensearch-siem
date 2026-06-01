@@ -356,6 +356,24 @@ curl -k https://127.0.0.1:5044/health
 
 Returns `{"status":"ok"}` when the listener is up. Used by the container healthcheck.
 
+### Status snapshot
+
+```bash
+set -a; . ./.env; set +a
+OPENSEARCH_URL=https://127.0.0.1:9200 \
+OPENSEARCH_USER=admin \
+OPENSEARCH_PASSWORD="$OPENSEARCH_ADMIN_PASSWORD" \
+  .venv/bin/python scripts/siem-status.py
+```
+
+Reports cluster status, heap %, disk allocation, per-stream doc counts, total
+quarantine docs, and Logstash pipeline throughput / queue depth.
+
+`OPENSEARCH_URL` defaults to `https://127.0.0.1:9200`. **Set it explicitly for a
+remote cluster** (e.g. `OPENSEARCH_URL=https://opensearch.internal:9200`) — the
+same default applies to `scripts/reconcile-opensearch-gitops.py`, so an unset
+value silently targets localhost.
+
 Stop the stack:
 
 ```bash
