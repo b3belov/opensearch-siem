@@ -26,8 +26,11 @@ LOG = logging.getLogger("ingest-edge")
 MAX_CONCURRENCY = int(os.environ.get("INGEST_EDGE_MAX_CONCURRENCY", "64"))
 
 SESSION = requests.Session()
-SESSION.mount("http://", HTTPAdapter(pool_connections=MAX_CONCURRENCY, pool_maxsize=MAX_CONCURRENCY))
-SESSION.mount("https://", HTTPAdapter(pool_connections=MAX_CONCURRENCY, pool_maxsize=MAX_CONCURRENCY))
+# pool_connections=1: ingest-edge talks to a single Logstash upstream; only one
+# host:port LRU bucket is ever used. pool_maxsize matches MAX_CONCURRENCY so no
+# thread blocks waiting for a connection slot.
+SESSION.mount("http://", HTTPAdapter(pool_connections=1, pool_maxsize=MAX_CONCURRENCY))
+SESSION.mount("https://", HTTPAdapter(pool_connections=1, pool_maxsize=MAX_CONCURRENCY))
 
 CONFIG_PATH = Path(os.environ.get("INGEST_EDGE_CONFIG", "/app/config/customer-auth.yml"))
 SECRET_ROOT = Path(os.environ.get("INGEST_EDGE_SECRET_ROOT", "/run/siem-secrets"))
@@ -229,7 +232,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class BoundedThreadingHTTPServer(ThreadingHTTPServer):
-    daemon_threads = True
+    # daemon_threads defaults to False (stdlib default) so the server drains
+    # in-flight request threads before main() exits on SIGTERM. Setting True
+    # would kill threads mid-POST to Logstash, silently dropping events.
 
     def __init__(self, *args: Any, max_concurrency: int, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
