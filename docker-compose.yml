@@ -47,6 +47,10 @@ services:
       - DATA_SOURCE_ENABLED=true
       - WORKSPACE_ENABLED=true
       - EXPLORE_ENABLED=true
+      - OPENSEARCH_SSL_VERIFICATIONMODE=full
+      - 'OPENSEARCH_SSL_CERTIFICATEAUTHORITIES=["/usr/share/opensearch-dashboards/config/certs/root-ca.crt"]'
+    volumes:
+      - ./secrets/certs/root-ca.crt:/usr/share/opensearch-dashboards/config/certs/root-ca.crt:ro
     ports:
       - "127.0.0.1:5601:5601"
     networks:
@@ -68,6 +72,7 @@ services:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
       - ./gitops/rendered/logstash:/usr/share/logstash/gitops:ro
       - ./data/logstash:/usr/share/logstash/data
+      - ./secrets/certs/root-ca.crt:/usr/share/logstash/config/certs/root-ca.crt:ro
     expose:
       - "9601"
     ports:

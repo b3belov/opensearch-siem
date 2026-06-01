@@ -140,7 +140,7 @@ def update_existing_ism_policy(base_url: str, path: str, body: dict) -> requests
     current = requests.get(
         f"{base_url}{path}",
         auth=opensearch_auth(),
-        verify=False,
+        verify=opensearch_verify(),
         timeout=30,
     )
     current.raise_for_status()
@@ -149,7 +149,7 @@ def update_existing_ism_policy(base_url: str, path: str, body: dict) -> requests
         f"{base_url}{path}?if_seq_no={metadata['_seq_no']}&if_primary_term={metadata['_primary_term']}",
         auth=opensearch_auth(),
         json=body,
-        verify=False,
+        verify=opensearch_verify(),
         timeout=30,
     )
 
@@ -162,7 +162,7 @@ def put_json(base_url: str, path: str, body: dict, dry_run: bool) -> None:
         f"{base_url}{path}",
         auth=opensearch_auth(),
         json=body,
-        verify=False,
+        verify=opensearch_verify(),
         timeout=30,
     )
     if response.status_code == 409 and path.startswith("/_plugins/_ism/policies/"):
