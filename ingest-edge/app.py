@@ -18,7 +18,6 @@ import yaml
 # Audit log. Lines are key=value greppable and intentionally contain only the
 # credential ID (a tenant identifier like "acme-primary"), peer/client IP, and
 # decision — NEVER the password or secret value.
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 LOG = logging.getLogger("ingest-edge")
 
 
@@ -207,7 +206,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def reject(self, status: int, message: str, credential: str = "-") -> None:
         peer = getattr(self, "client_address", ("-",))[0]
-        LOG.info("reject status=%s peer=%s credential=%s reason=%s", status, peer, credential, message)
+        # credential and reason are quoted with %r to prevent key=value log injection
+        # (credential comes from a client-supplied Authorization header).
+        LOG.info("reject status=%s peer=%s credential=%r reason=%r", status, peer, credential, message)
         body = json.dumps({"error": message}).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -220,6 +221,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     host = os.environ.get("INGEST_EDGE_HOST", "0.0.0.0")
     port = int(os.environ.get("INGEST_EDGE_PORT", "5044"))
     server = ThreadingHTTPServer((host, port), Handler)
