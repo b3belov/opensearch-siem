@@ -1,0 +1,34 @@
+{
+  "index_patterns": ["logs-*"],
+  "data_stream": {},
+  "template": {
+    "settings": {
+      "index.number_of_shards": 1,
+      "index.number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic": true,
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "customer": {
+          "properties": {
+            "slug": { "type": "keyword" }
+          }
+        },
+        "source": {
+          "properties": {
+            "id": { "type": "keyword" }
+          }
+        },
+        "event": {
+          "properties": {
+            "dataset": { "type": "keyword" },
+            "original": { "type": "wildcard" },
+            "ingested": { "type": "date" }
+          }
+        }
+      }
+    }
+  },
+  "priority": 200
+}

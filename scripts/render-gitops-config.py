@@ -78,6 +78,7 @@ def stream_template(stream: str, policy_id: str) -> dict[str, object]:
                         "properties": {
                             "dataset": {"type": "keyword"},
                             "original": {"type": "wildcard"},
+                            "ingested": {"type": "date"},
                         }
                     },
                 },
