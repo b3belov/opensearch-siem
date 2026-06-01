@@ -150,12 +150,20 @@ class Handler(BaseHTTPRequestHandler):
             self.reject(400, "event must be a json object")
             return
 
+        client_siem = event.get("siem")
+        source_id = client_siem.get("source_id") if isinstance(client_siem, dict) else None
+
+        for untrusted in ("customer", "data_stream", "@metadata"):
+            event.pop(untrusted, None)
+
         event["customer"] = {"slug": credential["customerSlug"]}
-        event["siem"] = {
-            **event.get("siem", {}),
+        siem: dict[str, Any] = {
             "credential_id": username,
             "ingest_edge_client_ip": client_ip,
         }
+        if isinstance(source_id, str) and source_id:
+            siem["source_id"] = source_id
+        event["siem"] = siem
 
         try:
             response = requests.post(LOGSTASH_URL, json=event, timeout=10)

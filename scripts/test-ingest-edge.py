@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,3 +139,52 @@ def test_secret_value_caches_and_refreshes_on_mtime(tmp_path, monkeypatch) -> No
     # bump mtime -> cache refreshes
     os.utime(secret_file, (base + 5, base + 5))
     assert app.secret_value("any/customer-acme-password") == "second"
+
+
+def _run_accepted_post(monkeypatch, body: bytes):
+    forwarded: dict = {}
+
+    class FakeResp:
+        status_code = 200
+        content = b"{}"
+
+    def fake_post(url, json=None, timeout=None):
+        forwarded["json"] = json
+        return FakeResp()
+
+    handler = object.__new__(app.Handler)
+    handler.headers = {"Authorization": basic("acme-primary", "secret"),
+                       "Content-Length": str(len(body))}
+    handler.client_address = ("203.0.113.10", 12345)
+    handler.rfile = SimpleNamespace(read=lambda length: body)
+    handler.wfile = SimpleNamespace(write=lambda b: None)
+    handler.send_response = lambda status: None
+    handler.send_header = lambda k, v: None
+    handler.end_headers = lambda: None
+
+    monkeypatch.setattr(app, "load_config", lambda: {
+        "credentials": {"acme-primary": {"enabled": True,
+            "secretRef": "secrets/local/customer-acme-password",
+            "customerSlug": "acme", "allowedCidrs": ["203.0.113.10/32"]}}})
+    monkeypatch.setattr(app, "secret_value", lambda ref: "secret")
+    monkeypatch.setattr(app.requests, "post", fake_post)  # patch requests.post directly on the module
+    handler.do_POST()
+    return forwarded["json"]
+
+
+def test_enrichment_strips_spoofed_fields(monkeypatch) -> None:
+    body = json.dumps({
+        "customer": {"slug": "victim"},
+        "data_stream": {"namespace": "victim"},
+        "@metadata": {"target_stream": "logs-victim-firewall"},
+        "siem": {"source_id": "firewall", "credential_id": "forged"},
+        "message": "hi",
+    }).encode()
+    out = _run_accepted_post(monkeypatch, body)
+    assert out["customer"] == {"slug": "acme"}
+    assert "data_stream" not in out
+    assert "@metadata" not in out
+    assert out["siem"]["source_id"] == "firewall"
+    assert out["siem"]["credential_id"] == "acme-primary"
+    assert out["siem"]["ingest_edge_client_ip"] == "203.0.113.10"
+    assert out["message"] == "hi"
