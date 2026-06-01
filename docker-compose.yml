@@ -69,6 +69,12 @@ services:
     depends_on:
       opensearch:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9600'"]
+      interval: 20s
+      timeout: 10s
+      retries: 12
+      start_period: 90s
 
   ingest-edge:
     build:
@@ -94,7 +100,14 @@ services:
     networks:
       - siem-net
     depends_on:
-      - central-logstash
+      central-logstash:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import ssl,urllib.request; urllib.request.urlopen('https://localhost:5044/health', context=ssl._create_unverified_context())\""]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 15s
 
   backup-job:
     build:
