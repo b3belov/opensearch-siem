@@ -2,7 +2,7 @@
 
 **Plan:** [2026-05-25-opensearch-siem-improvements.md](./2026-05-25-opensearch-siem-improvements.md)
 **Status:** stopped-by-user
-**Verified at commit:** 335e0aba7687292153d1e98c74c96160b6b87bde
+**Verified at commit:** 8db3701d55d6ba0797534e713a0de4f3ae480b4e
 
 ---
 
