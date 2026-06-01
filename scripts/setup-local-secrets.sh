@@ -24,7 +24,8 @@ if [[ ! -f secrets/certs/central.key || ! -f secrets/certs/central.crt ]]; then
     -keyout secrets/certs/central.key \
     -out secrets/certs/central.crt \
     -days 365 \
-    -subj "/CN=opensearch-siem-central-logstash"
+    -subj "/CN=opensearch-siem-central-logstash" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
   cp secrets/certs/central.crt secrets/certs/central-ca.crt
   chmod 600 secrets/certs/central.key
   chmod 644 secrets/certs/central.crt secrets/certs/central-ca.crt

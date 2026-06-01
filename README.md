@@ -213,7 +213,7 @@ Example event shape:
 Example request:
 
 ```bash
-curl --cacert secrets/certs/root-ca.crt \
+curl --cacert secrets/certs/central-ca.crt \
   -u "acme-primary:$(cat secrets/local/customer-acme-password)" \
   -H 'Content-Type: application/json' \
   https://127.0.0.1:5044/ \
@@ -356,7 +356,7 @@ docker compose restart central-logstash ingest-edge
 ### Check ingest-edge health
 
 ```bash
-curl --cacert secrets/certs/root-ca.crt https://127.0.0.1:5044/health
+curl --cacert secrets/certs/central-ca.crt https://127.0.0.1:5044/health
 ```
 
 Returns `{"status":"ok"}` when the listener is up. Used by the container healthcheck.
