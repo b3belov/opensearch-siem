@@ -123,6 +123,10 @@ def load_config() -> dict[str, Any]:
 Also replace the `secret_value` function (currently lines 52-54) with an mtime-cached version:
 
 ```python
+# Secret values are cached in-process for the lifetime of the server, keyed by
+# path and invalidated on mtime change (so a rotated secret is picked up on the
+# next request). For the v1 single-process edge this is acceptable; a multi-
+# process/HA v2 should prefer short-TTL or externally-managed secret rotation.
 _SECRET_CACHE: dict[str, tuple[float, str]] = {}
 
 
@@ -455,6 +459,9 @@ Near the top of `ingest-edge/app.py`, after the imports, add:
 ```python
 import logging
 
+# Audit log. Lines are key=value greppable and intentionally contain only the
+# credential ID (a tenant identifier like "acme-primary"), peer/client IP, and
+# decision — NEVER the password or secret value.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 LOG = logging.getLogger("ingest-edge")
 ```
@@ -510,10 +517,28 @@ Also override the noisy default request logger by adding to `Handler`:
 Run: `.venv/bin/python -m pytest scripts/test-ingest-edge.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Document the audit-log format**
+
+Add a "Reading ingest-edge audit logs" subsection to `README.md` under "Common Operations" / "Troubleshooting" so operators know the format and how to trace a tenant:
+
+```markdown
+### Reading ingest-edge audit logs
+
+The ingest edge emits one key=value line per decision (no passwords are logged):
+
+```text
+2026-06-01 12:00:00 INFO ingest-edge accept customer=acme credential=acme-primary client_ip=203.0.113.10 upstream=200
+2026-06-01 12:00:01 INFO ingest-edge reject status=403 peer=203.0.113.99 credential=acme-primary reason=invalid credential
+```
+
+Trace one tenant's traffic with `docker compose logs ingest-edge | grep 'credential=acme-primary'`.
+Common reject reasons: `unknown credential`, `invalid credential`, `source ip not allowed`.
+```
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add ingest-edge/app.py scripts/test-ingest-edge.py
+git add ingest-edge/app.py scripts/test-ingest-edge.py README.md
 git commit -m "feat(ingest-edge): structured audit logging for accept/reject decisions"
 ```
 
@@ -618,7 +643,7 @@ def main() -> None:
 Run: `.venv/bin/python -m pytest scripts/test-ingest-edge.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Add the env var to compose and commit**
+- [ ] **Step 5: Add the env var to compose**
 
 In `docker-compose.yml`, under `ingest-edge.environment`, add:
 
@@ -626,8 +651,19 @@ In `docker-compose.yml`, under `ingest-edge.environment`, add:
       - INGEST_EDGE_MAX_CONCURRENCY=64
 ```
 
+- [ ] **Step 6: Document the tuning knob and commit**
+
+Add to `README.md` (near the ingest-edge / "Security Notes" or "Common Operations" section):
+
+```markdown
+`INGEST_EDGE_MAX_CONCURRENCY` (default `64`) bounds the number of concurrent
+ingest-edge request threads. Each thread does a blocking, connection-pooled POST
+to Logstash. If Logstash per-event latency spikes (>100 ms), lower it to `32`;
+raise it only if the host has spare CPU and Logstash keeps up.
+```
+
 ```bash
-git add ingest-edge/app.py scripts/test-ingest-edge.py docker-compose.yml
+git add ingest-edge/app.py scripts/test-ingest-edge.py docker-compose.yml README.md
 git commit -m "feat(ingest-edge): bound concurrent request threads via semaphore"
 ```
 
@@ -1016,6 +1052,11 @@ OPENSEARCH_PASSWORD="$OPENSEARCH_ADMIN_PASSWORD" \
 
 Reports cluster status, heap %, disk allocation, per-stream doc counts, total
 quarantine docs, and Logstash pipeline throughput / queue depth.
+
+`OPENSEARCH_URL` defaults to `https://127.0.0.1:9200`. **Set it explicitly for a
+remote cluster** (e.g. `OPENSEARCH_URL=https://opensearch.internal:9200`) — the
+same default applies to `scripts/reconcile-opensearch-gitops.py`, so an unset
+value silently targets localhost.
 ```
 
 ```bash
@@ -1061,7 +1102,15 @@ Expected: FAIL (`orphaned_templates` undefined).
 
 - [ ] **Step 3: Implement orphan detection + wire into reconcile**
 
-In `scripts/reconcile-opensearch-gitops.py`, add:
+`report_drift` (below) uses the shared `opensearch_verify()` helper created in Phase C Task 8b. Add the import once, near the top of `scripts/reconcile-opensearch-gitops.py` (after the existing imports; `import sys` is needed and `REPO_ROOT` is already defined):
+
+```python
+import sys
+sys.path.insert(0, str(REPO_ROOT))
+from scripts.lib.opensearch_client import opensearch_verify
+```
+
+`opensearch_verify()` returns `False` until `OPENSEARCH_CA` is set in the environment (Phase I Task 15 adds it to `.env`), so behavior is unchanged through Phases D–H — the verify flips on automatically once Phase I lands. Then add:
 
 ```python
 def orphaned_templates(
@@ -1069,6 +1118,8 @@ def orphaned_templates(
     existing: list[dict],
     prefixes: tuple[str, ...],
 ) -> list[str]:
+    # Parameterized on `prefixes` so this can later cover orphaned ISM
+    # policies / data streams / roles by passing their name prefixes.
     result = []
     for item in existing:
         name = item.get("name", "")
@@ -1083,23 +1134,26 @@ def report_drift(base_url: str, desired_names: set[str]) -> None:
     resp = requests.get(
         f"{base_url}/_index_template",
         auth=opensearch_auth(),
-        verify=False,
+        verify=opensearch_verify(),
         timeout=30,
     )
     resp.raise_for_status()
     existing = resp.json().get("index_templates", [])
     orphans = orphaned_templates(desired_names, existing, prefixes=("logs-", "alerts-"))
     if orphans:
-        print("DRIFT: index templates present in OpenSearch but not in desired state.")
-        print("Review and, if intended, delete each with:")
         os_url = os.environ.get("OPENSEARCH_URL", "https://127.0.0.1:9200")
+        print("DRIFT: index templates present in OpenSearch but not in desired state.")
+        print("To remove an orphan, source your env (set -a; . ./.env; set +a) then run:")
+        print(f"  curl -X DELETE \"{os_url}/_index_template/<name>\" "
+              f"-u \"$OPENSEARCH_USER:$OPENSEARCH_PASSWORD\"")
+        print("Orphans:")
         for name in orphans:
-            print(f"  orphan {name}")
-            print(f"    curl -X DELETE \"{os_url}/_index_template/{name}\" "
-                  f"-u \"$OPENSEARCH_USER:$OPENSEARCH_PASSWORD\"")
+            print(f"  {name}")
     else:
         print("no orphaned managed index templates")
 ```
+
+> The credential is referenced via shell vars (`$OPENSEARCH_USER:$OPENSEARCH_PASSWORD`), printed once as a template with `<name>` — never expanded with a concrete password — so no secret is emitted to stdout or copy-pasted into shell history. `opensearch_verify()` is the shared helper imported above.
 
 **Reuse the names already applied instead of re-globbing.** In `reconcile(...)`, accumulate each template `name` as it is PUT in the two existing template-apply loops (current lines 108-114) into a set, then pass it to `report_drift`. Replace those two loops with:
 
@@ -1167,11 +1221,14 @@ Addresses #7: the relay template hardcodes `source_id`/`dataset` to `firewall`, 
 Run: `cat scripts/test-relay-bundle.sh`
 Note how it invokes the generator and what it asserts; you will add assertions for a non-firewall source.
 
-- [ ] **Step 2: Add a reusable enabled-source enumerator to the shared lib**
+- [ ] **Step 2: Add reusable helpers to the shared lib**
 
-The relay generator should not re-implement source globbing/parsing that already lives in `scripts/lib/gitops_config.py` ([`load_sources`](../../../scripts/lib/gitops_config.py)). Add a small helper there so both paths share one implementation. Append to `scripts/lib/gitops_config.py`:
+The relay generator should not re-implement source globbing/parsing that already lives in `scripts/lib/gitops_config.py` ([`load_sources`](../../../scripts/lib/gitops_config.py)), nor duplicate the Jinja `Environment` setup that `render-gitops-config.py` already does. Add both helpers there so every path shares one implementation. Append to `scripts/lib/gitops_config.py`:
 
 ```python
+from jinja2 import Environment, FileSystemLoader
+
+
 def enabled_sources_for_customer(customer_slug: str) -> list[dict[str, str]]:
     """Glob + parse a single customer's enabled sources (id/dataset only).
 
@@ -1187,7 +1244,23 @@ def enabled_sources_for_customer(customer_slug: str) -> list[dict[str, str]]:
             continue
         result.append({"id": doc["id"], "dataset": doc["dataset"]})
     return result
+
+
+def make_jinja_env(repo_root: Path) -> Environment:
+    """Canonical Jinja environment for rendering repo templates.
+
+    Single definition reused by render-gitops-config.py and the relay-bundle
+    generator so the trim/lstrip/autoescape settings can never drift.
+    """
+    return Environment(
+        loader=FileSystemLoader(str(repo_root)),
+        trim_blocks=True,
+        lstrip_blocks=True,
+        autoescape=False,
+    )
 ```
+
+Then update `scripts/render-gitops-config.py` to use it: replace its inline `env = Environment(loader=FileSystemLoader(str(REPO_ROOT)), trim_blocks=True, lstrip_blocks=True, autoescape=False)` block with `env = make_jinja_env(REPO_ROOT)` and add `make_jinja_env` to the existing `from scripts.lib.gitops_config import (...)` import. Re-run `.venv/bin/python scripts/render-gitops-config.py` and `PYTHON=.venv/bin/python bash scripts/test-rendered-gitops-config.sh` to confirm rendered output is byte-identical (the settings match, so it must be).
 
 - [ ] **Step 3: Rewrite the relay pipeline template**
 
@@ -1231,19 +1304,20 @@ In `scripts/generate-relay-bundle.sh`, replace the second embedded Python block 
 from pathlib import Path
 import re
 import sys
-from jinja2 import Environment, FileSystemLoader
 
 repo = Path(sys.argv[1])
 customer_slug = sys.argv[2]
 credential_id = sys.argv[3]
 
 sys.path.insert(0, str(repo))
-from scripts.lib.gitops_config import enabled_sources_for_customer
+from scripts.lib.gitops_config import enabled_sources_for_customer, make_jinja_env
 
 # Defense-in-depth: these values are interpolated unescaped into a Logstash
 # .conf (autoescape can't help with Ruby-config syntax). guard against
-# config-injection / breakout at the emission point.
-SAFE = re.compile(r"^[a-z0-9_-]+$")
+# config-injection / breakout at the emission point. Pattern MUST match the
+# id/dataset constraint in gitops/schemas/source.schema.json exactly so the
+# generator never rejects a schema-valid source nor accepts an invalid one.
+SAFE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
 
 sources = []
 port = 5514
@@ -1256,8 +1330,7 @@ for src in enabled_sources_for_customer(customer_slug):
 if not sources:
     raise SystemExit(f"no enabled sources for customer {customer_slug}")
 
-env = Environment(loader=FileSystemLoader(str(repo)), autoescape=False,
-                  trim_blocks=True, lstrip_blocks=True)
+env = make_jinja_env(repo)
 bundle = repo / "relay" / "bundles" / customer_slug
 bundle.mkdir(parents=True, exist_ok=True)
 (bundle / "logstash.yml").write_text(
@@ -1269,14 +1342,17 @@ bundle.mkdir(parents=True, exist_ok=True)
         central_url="https://siem.example.com:5044",
         sources=sources,
     ), encoding="utf-8")
-ports = ", ".join(str(s["port"]) for s in sources)
+port_table = "\n".join(f"  {s['id']}: udp/tcp {s['port']}" for s in sources)
 (bundle / "README.md").write_text(
     "Install central-ca.crt at /usr/share/logstash/config/certs/central-ca.crt "
-    "and set CUSTOMER_FORWARDER_PASSWORD before starting the relay.\n"
-    f"Syslog listener ports by source: {ports}\n",
+    "and set CUSTOMER_FORWARDER_PASSWORD before starting the relay.\n\n"
+    "Point each log source at the matching syslog listener port:\n"
+    f"{port_table}\n",
     encoding="utf-8")
 PY
 ```
+
+The generated README now lists each source with its dedicated port (e.g. `firewall: udp/tcp 5514`, `windows: udp/tcp 5515`), so a customer admin can map senders and firewall rules without cross-referencing `pipeline.conf`.
 
 - [ ] **Step 5: Extend the relay bundle test**
 
@@ -1298,9 +1374,12 @@ Expected: PASS, bundle contains a syslog input per enabled source on ports 5514,
 - [ ] **Step 7: Commit**
 
 ```bash
-git add relay/templates/pipeline.conf.j2 scripts/generate-relay-bundle.sh scripts/test-relay-bundle.sh scripts/lib/gitops_config.py
+git add relay/templates/pipeline.conf.j2 scripts/generate-relay-bundle.sh scripts/test-relay-bundle.sh \
+        scripts/lib/gitops_config.py scripts/render-gitops-config.py gitops/rendered
 git commit -m "feat(relay): generate per-source syslog inputs from declared GitOps sources"
 ```
+
+(Re-render before committing so any `gitops/rendered` whitespace from the `make_jinja_env` swap is captured: `.venv/bin/python scripts/render-gitops-config.py`. Output should be byte-identical, but stage it to keep the staleness gate green.)
 
 ---
 
@@ -1367,7 +1446,7 @@ def create_data_stream(base_url: str, name: str, dry_run: bool) -> None:
     response = requests.put(
         f"{base_url}/_data_stream/{name}",
         auth=opensearch_auth(),
-        verify=False,
+        verify=opensearch_verify(),  # shared helper imported in Task 10
         timeout=30,
     )
     if response.status_code == 400:
@@ -1557,6 +1636,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # CI pins 3.12; README states "Python 3.11 or newer" for local dev. The
+      # deps are pure-Python and 3.11-compatible, so local 3.11 runs match CI.
+      # If you bump this, update README's prerequisites line to match.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -1607,6 +1689,8 @@ Addresses the disabled OpenSearch TLS verification in `90-opensearch-output.conf
 
 > **Pre-flight:** Confirm with the operator before running — this regenerates certificates and reconfigures the OpenSearch security plugin, which requires wiping and re-initializing the local cluster (`docker compose down && rm -rf data/opensearch`).
 
+> **If you skip Phase I:** Phases A–H deliberately keep the `curl -k` examples, `verify=False` defaults (`OPENSEARCH_CA` unset → `opensearch_verify()` returns `False`), and the compose `-sku`/unverified healthchecks. That is the correct, self-consistent state for a skipped Phase I — **leave them as-is**. Only Phase I (below) flips them, and only Phase I adds `OPENSEARCH_CA` to `.env`. Add a short banner to the README intro so operators know which mode they are in: *"TLS to OpenSearch is unverified until the optional Phase I (internal PKI) is applied."*
+
 ---
 
 ### Task 15: Generate an internal CA and an OpenSearch node certificate
@@ -1649,6 +1733,10 @@ fi
 Append:
 
 ```bash
+# v1 single-node: OpenSearch matches the admin client cert by DN (CN=admin)
+# only, so no extendedKeyUsage/keyUsage extensions are required. A multi-node
+# v2+ deployment SHOULD constrain it:
+#   -extfile <(printf "extendedKeyUsage=clientAuth\nkeyUsage=digitalSignature")
 if [[ ! -f secrets/certs/admin.key || ! -f secrets/certs/admin.crt ]]; then
   openssl req -nodes -newkey rsa:2048 \
     -keyout secrets/certs/admin.key \
@@ -1773,7 +1861,16 @@ docker compose logs opensearch | grep -iE "security index|securityadmin|initiali
 ```
 Expected: a line indicating the security index was created/initialized. The healthcheck (`curl -sku`) will report unhealthy until this completes — allow up to `start_period` (120s).
 
-**Fallback if the security index does NOT auto-initialize** (cluster stays red / 503s on the security API): run `securityadmin.sh` once using the admin cert, pointing at the bundled demo securityconfig:
+**Fallback if the security index does NOT auto-initialize** (cluster stays red / 503s on the security API): run `securityadmin.sh` once using the admin cert, pointing at the bundled securityconfig.
+
+First locate the tool and config dir in the 3.6.0 image (the path below is correct for OpenSearch 2.x and most 3.x, but verify rather than assume — the layout can shift between minor versions):
+
+```bash
+docker compose exec opensearch bash -lc 'find / -name securityadmin.sh 2>/dev/null; \
+  ls -d config/opensearch-security 2>/dev/null || find / -type d -name opensearch-security 2>/dev/null'
+```
+
+Then run it with the discovered paths (adjust if `find` reported different locations):
 
 ```bash
 docker compose exec opensearch bash -lc '\
@@ -1854,18 +1951,22 @@ and under `environment`:
       - 'OPENSEARCH_SSL_CERTIFICATEAUTHORITIES=["/usr/share/opensearch-dashboards/config/certs/root-ca.crt"]'
 ```
 
-- [ ] **Step 3: Make the reconciler verify against the CA (via the shared helper)**
+- [ ] **Step 3: Flip the remaining legacy `verify=False` sites in the reconciler**
 
-`siem-status.py` already imports `opensearch_verify` from `scripts/lib/opensearch_client.py` (Task 8b) and uses it. Now make the reconciler use the **same** helper instead of introducing a duplicate `_verify()`.
+`siem-status.py` (Task 9) and the reconciler's `report_drift` (Task 10) and `create_data_stream` (Task 12) already call `verify=opensearch_verify()` via the shared helper — and the `from scripts.lib.opensearch_client import opensearch_verify` import was already added to the reconciler in Phase D Task 10. So no new import is needed here; this step only flips the **three remaining hard-coded `verify=False`** sites that predate this plan:
 
-In `scripts/reconcile-opensearch-gitops.py`, after the existing imports add:
+1. `update_existing_ism_policy` — the `requests.get(...)` call (current line ~71-76).
+2. `update_existing_ism_policy` — the `requests.put(...)` call (current line ~79-85).
+3. `put_json` — the `requests.put(...)` call (current line ~92-98).
 
-```python
-sys.path.insert(0, str(REPO_ROOT))
-from scripts.lib.opensearch_client import opensearch_verify
+Replace `verify=False` with `verify=opensearch_verify()` in each. After this, **grep proves none remain**:
+
+```bash
+grep -n "verify=False" scripts/reconcile-opensearch-gitops.py scripts/siem-status.py
 ```
+Expected: no matches.
 
-(`import sys` is needed; `REPO_ROOT` is already defined.) Then replace every `verify=False` in that file with `verify=opensearch_verify()`. The reconciler's existing local `opensearch_auth()` can stay as-is (it is already a single definition used throughout this module); no second copy of verify logic is created.
+(No duplicate `_verify()` is introduced — the reconciler's existing local `opensearch_auth()` stays as the single auth definition for that module; only `verify` is centralized.)
 
 Run `.venv/bin/python -m pytest scripts/test-opensearch-reconciler.py scripts/test-siem-status.py scripts/test-opensearch-client.py -v` to confirm nothing broke.
 

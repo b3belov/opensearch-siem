@@ -114,3 +114,91 @@
 ### Iteration summary
 - Findings raised: 18 (after triage) | applied: 18 | rejected: 0 | deferred: 0
 - Plan commit: abbc02251ebe173323964b65e4adaa4dd0ebdb34
+
+## Iteration 2 — 2026-06-01
+
+**Dispatched concerns:** ISSUES, security, UX, reusability (performance folded in — iter-1 resolved/deferred the per-request hot-path items; no separate performance agent this round)
+**Codebase commit at analysis:** e8c4dbbb70c0464e9a9c76ecbda20fafba50bc5c
+
+### Findings
+
+29 raw findings from 4 subagents. Triage: 8 ISSUES-axis findings dropped (the agent misread the task — every finding was "X not yet in codebase," i.e. confusing an unexecuted plan with a defective one); 1 merged (security S5 + UX U2, both the drift-report credential leak); 1 rejected (R2); 4 deferred. 15 actionable, all approved and applied.
+
+#### F-2.1 — [high] — [security] — Phase I Step 3 missed two verify=False sites
+- **Location in plan:** Phase D Task 10, Phase F Task 12, Phase I Task 17 Step 3
+- **Decision:** applied
+- **Plan diff:**
+  - Task 10: import `opensearch_verify` into the reconciler (lib exists from Task 8b); `report_drift` uses `verify=opensearch_verify()`.
+  - Task 12: `create_data_stream` uses `verify=opensearch_verify()`.
+  - Task 17 Step 3: rewritten to enumerate the 3 remaining legacy `verify=False` sites + grep proof none remain.
+
+#### F-2.2 — [med] — [security] — Relay charset guard looser than source schema
+- **Location in plan:** Phase E Task 11 Step 4
+- **Decision:** applied
+- **Plan diff:** SAFE regex changed `^[a-z0-9_-]+$` → `^[a-z][a-z0-9-]{1,40}$` to match `source.schema.json` exactly.
+
+#### F-2.3 — [med] — [security+UX, merged S5+U2] — Drift report leaked creds into shell history
+- **Location in plan:** Phase D Task 10
+- **Decision:** applied
+- **Plan diff:** `report_drift` prints a single `<name>` command template referencing `$OPENSEARCH_USER:$OPENSEARCH_PASSWORD` (never expanded) + "source .env first" note; added rationale note.
+
+#### F-2.4 — [med] — [UX] — INGEST_EDGE_MAX_CONCURRENCY undocumented
+- **Location in plan:** Phase A Task 6
+- **Decision:** applied
+- **Plan diff:** Added README tuning-knob doc step; renumbered commit to Step 6; README added to commit.
+
+#### F-2.5 — [med] — [UX] — Audit-log format undocumented
+- **Location in plan:** Phase A Task 5
+- **Decision:** applied
+- **Plan diff:** Added "Reading ingest-edge audit logs" README step with sample lines + grep guidance; renumbered commit to Step 6.
+
+#### F-2.6 — [med] — [UX] — No "Phase I skipped" guidance
+- **Location in plan:** Phase I intro, Task 17 Step 4
+- **Decision:** applied
+- **Plan diff:** Added a "If you skip Phase I" callout (leave -k/verify=False/-sku as-is) + README TLS-mode banner instruction.
+
+#### F-2.7 — [med] — [UX] — Relay bundle README bare port list
+- **Location in plan:** Phase E Task 11 Step 4
+- **Decision:** applied
+- **Plan diff:** Generated README now prints a source→port table (`firewall: udp/tcp 5514`).
+
+#### F-2.8 — [med] — [reusability] — Jinja env setup duplicated
+- **Location in plan:** Phase E Task 11 Step 2, Phase G (render)
+- **Decision:** applied
+- **Plan diff:** Added `make_jinja_env(repo_root)` to `gitops_config.py`; render-gitops-config.py and the relay generator both use it; commit + re-render note updated.
+
+#### F-2.9 — [low] — [UX] — CI Python 3.12 vs README 3.11+
+- **Location in plan:** Phase H Task 14 Step 3
+- **Decision:** applied
+- **Plan diff:** Added reconciliation comment in the workflow.
+
+#### F-2.10 — [low] — [UX] — OPENSEARCH_URL localhost default unwarned
+- **Location in plan:** Phase C Task 9 Step 5
+- **Decision:** applied
+- **Plan diff:** Added README warning that it defaults to localhost (applies to reconciler too).
+
+#### F-2.11 — [low] — [UX] — securityadmin.sh path may differ on 3.6.0
+- **Location in plan:** Phase I Task 16 Step 4
+- **Decision:** applied
+- **Plan diff:** Added a `find`-based discovery step before the fallback command + caveat.
+
+#### F-2.12 — [low] — [reusability] — orphaned_templates naming
+- **Location in plan:** Phase D Task 10
+- **Decision:** applied
+- **Plan diff:** Added comment noting it can be reused for ISM/streams/roles via the `prefixes` arg.
+
+#### F-2.13 — [low] — [security] — code comments (audit log password-free / _SECRET_CACHE lifetime / admin cert EKU)
+- **Location in plan:** Phase A Task 5, Task 1, Phase I Task 15
+- **Decision:** applied
+- **Plan diff:** Three inline comments added.
+
+### Rejected / deferred
+- **F-2.R2 — rejected** — [reusability] "Have desired_stream_names() recompute names from a shared function instead of reading streams.yml." Reading the rendered artifact IS the correct GitOps factoring (reconcile consumes committed rendered output, does not re-derive). No genuine second implementation exists. Reason: would break the render-owns/reconcile-reads contract.
+- **Deferred (low value / scope creep):** os_get/os_put wrapper (YAGNI, 2 sites); pytest handler fixture for test-ingest-edge (test churn > benefit); relay-side healthcheck guidance (customer-side, optional); `siem-status --brief` mode (feature creep).
+
+### Axis note
+- ISSUES axis produced 0 actionable findings (all 8 were category errors — "plan not executed yet"). Recorded for transparency, not retried.
+
+### Iteration summary
+- Findings raised: 15 (after triage) | applied: 15 | rejected: 1 | deferred: 4
+- Plan commit: (recorded at commit time)
