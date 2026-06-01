@@ -110,6 +110,32 @@ def report_drift(base_url: str, desired_names: set[str]) -> None:
         print("no orphaned managed index templates")
 
 
+def create_data_stream(base_url: str, name: str, dry_run: bool) -> None:
+    if dry_run:
+        print(f"DRY-RUN PUT /_data_stream/{name}")
+        return
+    response = requests.put(
+        f"{base_url}/_data_stream/{name}",
+        auth=opensearch_auth(),
+        verify=opensearch_verify(),
+        timeout=30,
+    )
+    if response.status_code == 400:
+        error_type = response.json().get("error", {}).get("type", "")
+        if error_type == "resource_already_exists_exception":
+            return
+    response.raise_for_status()
+    print(f"created data stream {name}")
+
+
+def desired_stream_names() -> list[str]:
+    path = REPO_ROOT / "gitops/rendered/opensearch/streams.yml"
+    if not path.exists():
+        return []
+    doc = load_yaml(path)
+    return list(doc.get("streams", []))
+
+
 def update_existing_ism_policy(base_url: str, path: str, body: dict) -> requests.Response:
     current = requests.get(
         f"{base_url}{path}",
@@ -162,6 +188,9 @@ def reconcile(dry_run: bool) -> None:
     for path in sorted((REPO_ROOT / "opensearch/base/ism").glob("*.json")):
         name = path.stem
         put_json(base_url, f"/_plugins/_ism/policies/{name}", load_json(path), dry_run)
+
+    for stream in desired_stream_names():
+        create_data_stream(base_url, stream, dry_run)
 
     role_path = REPO_ROOT / "gitops/rendered/opensearch/security/logstash-writer-role.json"
     if role_path.exists():

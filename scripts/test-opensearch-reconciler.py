@@ -74,3 +74,32 @@ def test_orphaned_templates_detects_extras() -> None:
     ]
     orphans = reconciler.orphaned_templates(desired, existing, prefixes=("logs-", "alerts-"))
     assert orphans == ["logs-bravo-old-template"]
+
+
+def test_create_data_stream_ignores_already_exists(monkeypatch) -> None:
+    puts: list[str] = []
+
+    def fake_put(url, **kwargs):
+        puts.append(url)
+        return FakeResponse(400, {"error": {"type": "resource_already_exists_exception"}})
+
+    monkeypatch.setenv("OPENSEARCH_USER", "admin")
+    monkeypatch.setenv("OPENSEARCH_PASSWORD", "secret")
+    monkeypatch.setattr(reconciler.requests, "put", fake_put)
+
+    # must NOT raise on already-exists
+    reconciler.create_data_stream("https://os.local", "logs-acme-firewall", dry_run=False)
+    assert puts == ["https://os.local/_data_stream/logs-acme-firewall"]
+
+
+def test_create_data_stream_raises_on_other_errors(monkeypatch) -> None:
+    def fake_put(url, **kwargs):
+        return FakeResponse(403, {"error": {"type": "security_exception"}})
+
+    monkeypatch.setenv("OPENSEARCH_USER", "admin")
+    monkeypatch.setenv("OPENSEARCH_PASSWORD", "secret")
+    monkeypatch.setattr(reconciler.requests, "put", fake_put)
+
+    import pytest
+    with pytest.raises(requests.HTTPError):
+        reconciler.create_data_stream("https://os.local", "logs-acme-firewall", dry_run=False)
