@@ -133,10 +133,12 @@ services:
       - OPENSEARCH_URL=https://opensearch:9200
       - OPENSEARCH_USER=${BACKUP_USER:-admin}
       - OPENSEARCH_PASSWORD=${BACKUP_PASSWORD:-}
+      - OPENSEARCH_CA=/etc/siem/root-ca.crt
       - SNAPSHOT_REPOSITORY=${SNAPSHOT_REPOSITORY:-siem-snapshots}
     volumes:
       - ./:/repo:ro
       - ./data/backups:/backup
+      - ./secrets/certs/root-ca.crt:/etc/siem/root-ca.crt:ro
     networks:
       - siem-net
     depends_on:
