@@ -94,7 +94,7 @@ services:
       opensearch:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9600'"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9600/_node/stats/pipelines >/dev/null 2>&1"]
       interval: 20s
       timeout: 10s
       retries: 12
