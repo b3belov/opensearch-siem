@@ -1,8 +1,8 @@
 # Hardening Ledger: 2026-06-02-opensearch-siem-hardening-phase2
 
 **Plan:** [2026-06-02-opensearch-siem-hardening-phase2.md](./2026-06-02-opensearch-siem-hardening-phase2.md)
-**Status:** in-progress
-**Verified at commit:** 0d74a33ad4a90a663082fd78dc5fd6a42fff97d0
+**Status:** stopped-by-user
+**Verified at commit:** 1a6ec41c87ce7da5bef617e2458ef8917f2708dd
 
 ---
 
@@ -143,4 +143,4 @@
 
 ### Iteration summary
 - Findings raised: 5 (after triage) | applied: 5 | rejected: 0 | deferred: 0
-- Plan commit: pending
+- Plan commit: 1a6ec41c87ce7da5bef617e2458ef8917f2708dd
