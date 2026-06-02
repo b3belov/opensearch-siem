@@ -392,6 +392,18 @@ Restart runtime services after rendered config changes:
 docker compose restart central-logstash ingest-edge
 ```
 
+### Reading reconciler logs
+
+The reconciler emits structured log lines with timestamps and levels:
+
+```text
+2026-06-01 12:00:00 INFO reconciler applied /_index_template/logs-acme-firewall-template
+2026-06-01 12:00:00 WARNING reconciler DRIFT: index templates present in OpenSearch but not in desired state.
+```
+
+`INFO` lines show applied objects and dry-run output. `WARNING` lines flag drift
+(orphaned templates). Filter with `grep WARNING` to find issues.
+
 ### Check ingest-edge health
 
 ```bash

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -13,7 +14,10 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-from scripts.lib.opensearch_client import opensearch_verify
+from scripts.lib.opensearch_client import opensearch_auth, opensearch_verify
+
+
+LOG = logging.getLogger("reconciler")
 
 
 def load_json(path: Path) -> dict:
@@ -66,10 +70,6 @@ def service_account_password(account: dict, dry_run: bool) -> str:
     raise RuntimeError(f"missing {env_name} or {account['secretRef']}")
 
 
-def opensearch_auth() -> tuple[str, str]:
-    return os.environ["OPENSEARCH_USER"], os.environ["OPENSEARCH_PASSWORD"]
-
-
 def orphaned_templates(
     desired_names: set[str],
     existing: list[dict],
@@ -99,20 +99,21 @@ def report_drift(base_url: str, desired_names: set[str]) -> None:
     orphans = orphaned_templates(desired_names, existing, prefixes=("logs-", "alerts-"))
     if orphans:
         os_url = os.environ.get("OPENSEARCH_URL", "https://127.0.0.1:9200")
-        print("DRIFT: index templates present in OpenSearch but not in desired state.")
-        print("To remove an orphan, source your env (set -a; . ./.env; set +a) then run:")
-        print(f"  curl -X DELETE \"{os_url}/_index_template/<name>\" "
-              f"-u \"$OPENSEARCH_USER:$OPENSEARCH_PASSWORD\"")
-        print("Orphans:")
+        LOG.warning("DRIFT: index templates present in OpenSearch but not in desired state.")
+        LOG.info("To remove an orphan, source your env (set -a; . ./.env; set +a) then run:")
+        LOG.info(
+            'curl -X DELETE "%s/_index_template/<name>" -u "$OPENSEARCH_USER:$OPENSEARCH_PASSWORD"',
+            os_url,
+        )
         for name in orphans:
-            print(f"  {name}")
+            LOG.warning("orphaned managed index template %s", name)
     else:
-        print("no orphaned managed index templates")
+        LOG.info("no orphaned managed index templates")
 
 
 def create_data_stream(base_url: str, name: str, dry_run: bool) -> None:
     if dry_run:
-        print(f"DRY-RUN PUT /_data_stream/{name}")
+        LOG.info("DRY-RUN PUT /_data_stream/%s", name)
         return
     response = requests.put(
         f"{base_url}/_data_stream/{name}",
@@ -125,7 +126,7 @@ def create_data_stream(base_url: str, name: str, dry_run: bool) -> None:
         if error_type == "resource_already_exists_exception":
             return
     response.raise_for_status()
-    print(f"created data stream {name}")
+    LOG.info("created data stream %s", name)
 
 
 def desired_stream_names() -> list[str]:
@@ -156,7 +157,7 @@ def update_existing_ism_policy(base_url: str, path: str, body: dict) -> requests
 
 def put_json(base_url: str, path: str, body: dict, dry_run: bool) -> None:
     if dry_run:
-        print(f"DRY-RUN PUT {path}")
+        LOG.info("DRY-RUN PUT %s", path)
         return
     response = requests.put(
         f"{base_url}{path}",
@@ -168,7 +169,8 @@ def put_json(base_url: str, path: str, body: dict, dry_run: bool) -> None:
     if response.status_code == 409 and path.startswith("/_plugins/_ism/policies/"):
         response = update_existing_ism_policy(base_url, path, body)
     response.raise_for_status()
-    print(f"applied {path}")
+    # Log the path only -- body may contain passwords (e.g. internalusers endpoint).
+    LOG.info("applied %s", path)
 
 
 def reconcile(dry_run: bool) -> None:
@@ -221,6 +223,10 @@ def reconcile(dry_run: bool) -> None:
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

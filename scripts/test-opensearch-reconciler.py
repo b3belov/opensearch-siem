@@ -103,3 +103,32 @@ def test_create_data_stream_raises_on_other_errors(monkeypatch) -> None:
     import pytest
     with pytest.raises(requests.HTTPError):
         reconciler.create_data_stream("https://os.local", "logs-acme-firewall", dry_run=False)
+
+
+def test_put_json_logs_applied_action(monkeypatch, caplog) -> None:
+    import logging
+
+    def fake_put(url, **kwargs):
+        return FakeResponse(200)
+
+    monkeypatch.setenv("OPENSEARCH_USER", "admin")
+    monkeypatch.setenv("OPENSEARCH_PASSWORD", "secret")
+    monkeypatch.setattr(reconciler.requests, "put", fake_put)
+
+    with caplog.at_level(logging.INFO, logger="reconciler"):
+        reconciler.put_json("https://os.local", "/_index_template/test", {}, dry_run=False)
+
+    assert any("applied" in r.getMessage() and "/_index_template/test" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_put_json_dry_run_logs_at_info(monkeypatch, caplog) -> None:
+    import logging
+
+    monkeypatch.setenv("OPENSEARCH_USER", "admin")
+    monkeypatch.setenv("OPENSEARCH_PASSWORD", "secret")
+
+    with caplog.at_level(logging.INFO, logger="reconciler"):
+        reconciler.put_json("https://os.local", "/_index_template/test", {}, dry_run=True)
+
+    assert any("DRY-RUN" in r.getMessage() for r in caplog.records)
