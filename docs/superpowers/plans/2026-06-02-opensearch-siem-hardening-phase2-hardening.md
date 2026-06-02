@@ -2,7 +2,7 @@
 
 **Plan:** [2026-06-02-opensearch-siem-hardening-phase2.md](./2026-06-02-opensearch-siem-hardening-phase2.md)
 **Status:** in-progress
-**Verified at commit:** b3ce644b77f28b8ceb598fa9511919d088187a26
+**Verified at commit:** 0d74a33ad4a90a663082fd78dc5fd6a42fff97d0
 
 ---
 
@@ -91,4 +91,56 @@
 
 ### Iteration summary
 - Findings raised: 12 (after triage) | applied: 12 | rejected: 0 | deferred: 0
+- Plan commit: 0d74a33ad4a90a663082fd78dc5fd6a42fff97d0
+
+## Iteration 2 — 2026-06-02
+
+**Dispatched concerns:** ISSUES, UX, security, reusability+performance (combined)
+**Codebase commit at analysis:** 0d74a33ad4a90a663082fd78dc5fd6a42fff97d0
+
+### Findings
+
+18 raw findings from 4 subagents. Triage: 12 dropped (wrong premises — backup-job already has volumes section; Docker bind mounts create directories; reconciler/ingest-edge run in separate containers; backup repo check runs infrequently; ingest-edge healthcheck not touched by plan; x-logging has no conflicts; caplog overhead negligible; log format difference is by design; relay bundle ops guide is scope creep). 1 merged (ISSUES F-2.1 + ISSUES F-2.4 + UX-2.1 all describe same CI breakage). 5 actionable, all approved and applied.
+
+#### F-2.1 — [high] — [issues+UX, merged] — CI workflow breaks: relay bundle test needs RELAY_CENTRAL_URL
+- **Location in plan:** Task 12 (interaction with `.github/workflows/ci.yml:38`)
+- **Decision:** applied
+- **Plan diff:** Added Step 3 to Task 12: update CI workflow relay bundle test step to pass `RELAY_CENTRAL_URL=https://siem.example.com:5044`; renumbered commit to Step 4; `.github/workflows/ci.yml` added to commit.
+
+#### F-2.2 — [med] — [security] — Backup script validates CA but not credentials
+- **Location in plan:** Task 3, Step 2
+- **Decision:** applied
+- **Plan diff:** Added credential validation check (`OPENSEARCH_USER`/`OPENSEARCH_PASSWORD`) before the CA check in `backup-opensearch.sh`.
+
+#### F-2.3 — [med] — [UX] — Backup TLS requirement undocumented for operators
+- **Location in plan:** Task 3
+- **Decision:** applied
+- **Plan diff:** Added Step 4 "Document backup prerequisites in README" covering credentials, TLS, and repository requirements; renumbered commit to Step 5; README added to commit.
+
+#### F-2.4 — [low] — [UX] — Log rotation settings worth brief README mention
+- **Location in plan:** Task 6
+- **Decision:** applied
+- **Plan diff:** Added Step 3 "Document log rotation in README" as a one-liner in the resource configuration section; renumbered commit to Step 4; README added to commit.
+
+#### F-2.5 — [low] — [security] — create_ssl_context() could restrict cipher suites
+- **Location in plan:** Task 1, Step 3
+- **Decision:** applied
+- **Plan diff:** Added `context.set_ciphers(...)` with modern forward-secrecy cipher string after `minimum_version` in `create_ssl_context()`.
+
+### Dropped in triage (not applied)
+- ISSUES F-2.2: "backup-job has no volumes section" — wrong premise; backup-job has volumes at lines 137-139.
+- ISSUES F-2.3: "Alpine lacks /etc/siem directory" — Docker bind mounts create target directories automatically.
+- ISSUES F-2.5: "opensearch_auth behavior change" — agent self-concluded "not an issue, intended improvement."
+- SEC F-2.1: "ingest-edge healthcheck may leak info" — plan doesn't modify ingest-edge healthcheck; out of scope.
+- SEC F-2.2: "reconciler tests don't cover missing env var" — already covered by test-opensearch-client.py at the shared lib level.
+- REUSE F-2.1: "backup repo check adds latency" — runs once per backup invocation (infrequent), trivial overhead.
+- REUSE F-2.2: "logging pattern inconsistency" — wrong premise; services run in separate containers/processes.
+- REUSE F-2.3: "caplog overhead in tests" — agent assessed as "low priority", 10-50ms negligible.
+- REUSE F-2.4: "log format differs between services" — intentional (audit vs operational), not a bug.
+- REUSE F-2.5: "x-logging anchor conflicts" — no existing x-* blocks in docker-compose.yml.
+- UX-2.2: "healthcheck change not documented" — infrastructure detail visible via `docker compose ps`, not operator-facing.
+- UX-2.5: "relay bundle ops guide" — scope creep beyond this plan.
+
+### Iteration summary
+- Findings raised: 5 (after triage) | applied: 5 | rejected: 0 | deferred: 0
 - Plan commit: pending

@@ -57,6 +57,7 @@ In `ingest-edge/app.py`, add this function above `main()`:
 def create_ssl_context() -> ssl.SSLContext:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.set_ciphers("ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!3DES:!MD5:!PSK")
     context.load_cert_chain(certfile=TLS_CERT_PATH, keyfile=TLS_KEY_PATH)
     return context
 ```
@@ -251,6 +252,11 @@ if [[ "${BACKUP_ENABLED:-false}" != "true" ]]; then
   exit 0
 fi
 
+if [[ -z "${OPENSEARCH_USER:-}" || -z "${OPENSEARCH_PASSWORD:-}" ]]; then
+  echo "ERROR: OPENSEARCH_USER and OPENSEARCH_PASSWORD must be set." >&2
+  exit 1
+fi
+
 if [[ -z "${OPENSEARCH_CA:-}" || ! -f "${OPENSEARCH_CA}" ]]; then
   echo "ERROR: OPENSEARCH_CA not set or file not found at '${OPENSEARCH_CA:-}'. Mount the CA certificate." >&2
   exit 1
@@ -269,10 +275,27 @@ echo "started OpenSearch snapshot $snapshot_name"
 Run: `docker compose config --quiet`
 Expected: exits 0, no errors.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Document backup prerequisites in README**
+
+Add to `README.md` under the backup section or "Common Operations":
+
+```markdown
+### Running backups
+
+The backup job requires three prerequisites before `docker compose --profile backup up`:
+
+1. **Credentials:** `BACKUP_USER` and `BACKUP_PASSWORD` set in `.env` (defaults to admin).
+2. **TLS:** `OPENSEARCH_CA` pointing to the CA certificate (mounted into the container).
+3. **Repository:** A snapshot repository registered in OpenSearch. The script checks
+   and prints a registration command if missing.
+
+The backup script fails fast with an actionable error if any prerequisite is missing.
+```
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add docker-compose.yml backup/backup-opensearch.sh
+git add docker-compose.yml backup/backup-opensearch.sh README.md
 git commit -m "fix(backup): enable TLS verification via mounted CA certificate"
 ```
 
@@ -429,10 +452,20 @@ Then add `logging: *default-logging` to each service. Under each service block (
 Run: `docker compose config --quiet`
 Expected: exits 0, no errors.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Document log rotation in README**
+
+In the "Memory and resource configuration" section added by Task 5, append:
+
+```markdown
+**Container log rotation:** All services use `json-file` logging with
+`max-size: 10m` and `max-file: 5` (50 MB per service). Adjust in the
+`x-logging` anchor at the top of `docker-compose.yml`.
+```
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git add docker-compose.yml
+git add docker-compose.yml README.md
 git commit -m "ops(compose): add log rotation to all services (10m x 5 files)"
 ```
 
@@ -1020,10 +1053,26 @@ with:
 Run: `RELAY_CENTRAL_URL=https://siem.example.com:5044 PYTHON=.venv/bin/python bash scripts/test-relay-bundle.sh`
 Expected: PASS. The env var must be set because the script now fails fast without it.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Update CI workflow to pass `RELAY_CENTRAL_URL`**
+
+In `.github/workflows/ci.yml`, replace the relay bundle test step:
+
+```yaml
+      - name: Relay bundle test
+        run: PYTHON=python bash scripts/test-relay-bundle.sh
+```
+
+with:
+
+```yaml
+      - name: Relay bundle test
+        run: RELAY_CENTRAL_URL=https://siem.example.com:5044 PYTHON=python bash scripts/test-relay-bundle.sh
+```
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git add scripts/generate-relay-bundle.sh
+git add scripts/generate-relay-bundle.sh .github/workflows/ci.yml
 git commit -m "feat(relay): read central URL from RELAY_CENTRAL_URL environment variable"
 ```
 
@@ -1033,6 +1082,7 @@ git commit -m "feat(relay): read central URL from RELAY_CENTRAL_URL environment 
 
 - **Spec coverage:** TLS minimum version (#1) -> Phase J Task 1; backup TLS (#2) -> Phase K Task 3; upstream error logging (#3) -> Phase J Task 2; resource limits (#4) -> Phase L Task 5; log rotation (#5) -> Phase L Task 6; DLQ monitoring (#6) -> Phase M Task 7; Logstash healthcheck (#7) -> Phase N Task 9; reconciler logging (#8) -> Phase O Task 10; `.env.example` (#9) -> Phase P Task 11; relay URL (#10) -> Phase P Task 12; backup repository check (#12) -> Phase K Task 4. Operational runbooks (#11) were dropped as out of scope for an implementation plan (documentation-only, no code/test).
 - **Independence:** All seven phases (J-P) are independent and individually shippable. No phase depends on another.
-- **Type consistency:** `create_ssl_context() -> ssl.SSLContext` (Task 1); `summarize_cluster(health, nodes_stats, allocation=None)` signature is backward-compatible with the existing 2-arg callers (Task 8); `summarize_logstash` return shape extended with `dlq_size_bytes`/`dlq_max_bytes` (Task 7); `LOG = logging.getLogger("reconciler")` uses a distinct logger name from ingest-edge's `"ingest-edge"` (Task 10); `opensearch_auth()` consolidated from local duplicate to shared `scripts/lib/opensearch_client.py` import (Task 10).
+- **Type consistency:** `create_ssl_context() -> ssl.SSLContext` with cipher restriction (Task 1); `summarize_cluster(health, nodes_stats, allocation=None)` signature is backward-compatible with the existing 2-arg callers (Task 8); `summarize_logstash` return shape extended with `dlq_size_bytes`/`dlq_max_bytes` (Task 7); `LOG = logging.getLogger("reconciler")` uses a distinct logger name from ingest-edge's `"ingest-edge"` (Task 10); `opensearch_auth()` consolidated from local duplicate to shared `scripts/lib/opensearch_client.py` import (Task 10).
+- **CI consistency:** `.github/workflows/ci.yml` relay bundle test step passes `RELAY_CENTRAL_URL` to match Task 12's fail-fast requirement (Task 12).
 - **Backward compatibility:** `report["allocation"]` preserved alongside the new `report["cluster"]` disk fields (Task 8). `summarize_cluster` 3rd arg defaults to `None` for existing 2-arg callers.
 - **Known deferrals:** Operational runbooks (documentation-only, no code changes). NDJSON batch ingest, Kafka broker, multi-node HA remain out of v1 scope per the design spec.
