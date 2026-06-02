@@ -35,7 +35,7 @@ jobs:
       - name: Render staleness gate
         run: PYTHON=python bash scripts/test-render-staleness.sh
       - name: Relay bundle test
-        run: PYTHON=python bash scripts/test-relay-bundle.sh
+        run: RELAY_CENTRAL_URL=https://siem.example.com:5044 PYTHON=python bash scripts/test-relay-bundle.sh
       - name: Secret-ignore test
         run: bash scripts/test-secret-ignore.sh
       - name: Compose config validation

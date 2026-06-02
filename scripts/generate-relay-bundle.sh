@@ -34,14 +34,35 @@ mkdir -p "$bundle_dir"
 
 "${PYTHON:-python3}" - "$repo_root" "$customer_slug" "$credential_id" <<'PY'
 from pathlib import Path
+import os
 import re
 import sys
+from urllib.parse import urlparse
 
 repo = Path(sys.argv[1])
 customer_slug = sys.argv[2]
 credential_id = sys.argv[3]
 
 sys.path.insert(0, str(repo))
+central_url = os.environ.get("RELAY_CENTRAL_URL")
+if not central_url:
+    raise SystemExit(
+        "ERROR: RELAY_CENTRAL_URL not set. Set it in .env or environment.\n"
+        "  Example: RELAY_CENTRAL_URL=https://siem.example.com:5044"
+    )
+if re.search(r'["\\]', central_url) or any(ord(ch) < 32 or ord(ch) == 127 for ch in central_url):
+    raise SystemExit(
+        "ERROR: RELAY_CENTRAL_URL contains unsafe characters "
+        "(quotes, backslashes, or control characters)."
+    )
+parsed_central_url = urlparse(central_url)
+if parsed_central_url.scheme != "https":
+    raise SystemExit("ERROR: RELAY_CENTRAL_URL must use https and include a host.")
+if not parsed_central_url.netloc or not parsed_central_url.hostname:
+    raise SystemExit("ERROR: RELAY_CENTRAL_URL must include a host.")
+if parsed_central_url.username or parsed_central_url.password:
+    raise SystemExit("ERROR: RELAY_CENTRAL_URL must not include username or password.")
+
 from scripts.lib.gitops_config import enabled_sources_for_customer, make_jinja_env
 
 # Defense-in-depth: these values are interpolated unescaped into a Logstash
@@ -71,7 +92,7 @@ bundle.mkdir(parents=True, exist_ok=True)
     env.get_template("relay/templates/pipeline.conf.j2").render(
         customer_slug=customer_slug,
         credential_id=credential_id,
-        central_url="https://siem.example.com:5044",
+        central_url=central_url,
         sources=sources,
     ), encoding="utf-8")
 port_table = "\n".join(f"  {s['id']}: udp/tcp {s['port']}" for s in sources)
