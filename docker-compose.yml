@@ -1,5 +1,12 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   opensearch:
+    logging: *default-logging
     image: opensearchproject/opensearch:3.6.0
     container_name: opensearch
     restart: unless-stopped
@@ -38,6 +45,7 @@ services:
     mem_limit: 6g
 
   opensearch-dashboards:
+    logging: *default-logging
     image: opensearchproject/opensearch-dashboards:3.6.0
     container_name: opensearch-dashboards
     restart: unless-stopped
@@ -62,6 +70,7 @@ services:
     mem_limit: 1g
 
   central-logstash:
+    logging: *default-logging
     image: opensearchproject/logstash-oss-with-opensearch-output-plugin:8.9.0
     container_name: central-logstash
     restart: unless-stopped
@@ -93,6 +102,7 @@ services:
     mem_limit: 6g
 
   ingest-edge:
+    logging: *default-logging
     build:
       context: .
       dockerfile: ingest-edge/Dockerfile
@@ -127,6 +137,7 @@ services:
     mem_limit: 512m
 
   backup-job:
+    logging: *default-logging
     build:
       context: .
       dockerfile: backup/Dockerfile

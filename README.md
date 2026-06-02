@@ -92,6 +92,10 @@ For a 16 GB VM, set opensearch/central-logstash to `mem_limit: 3g` with
 override file unless it is later parameterized. Monitor with
 `docker compose stats`.
 
+**Container log rotation:** All services use `json-file` logging with
+`max-size: 10m` and `max-file: 5` (50 MB per service). Adjust in the
+`x-logging` anchor at the top of `docker-compose.yml`.
+
 ## Local Setup
 
 Create and populate a Python virtual environment:
