@@ -35,6 +35,12 @@ assert_fails_with "ERROR: RELAY_CENTRAL_URL contains unsafe characters" \
   env RELAY_CENTRAL_URL='https://siem.example.com:5044"bad' bash scripts/generate-relay-bundle.sh acme
 assert_fails_with "ERROR: RELAY_CENTRAL_URL must use https" \
   env RELAY_CENTRAL_URL='http://siem.example.com:5044' bash scripts/generate-relay-bundle.sh acme
+assert_fails_with "ERROR: RELAY_CENTRAL_URL port must be a number" \
+  env RELAY_CENTRAL_URL='https://siem.example.com:bad' bash scripts/generate-relay-bundle.sh acme
+assert_fails_with "ERROR: RELAY_CENTRAL_URL must not contain whitespace" \
+  env RELAY_CENTRAL_URL='https://bad host:5044' bash scripts/generate-relay-bundle.sh acme
+assert_fails_with "ERROR: RELAY_CENTRAL_URL host must be a valid DNS name or IP address" \
+  env RELAY_CENTRAL_URL='https://bad_host:5044' bash scripts/generate-relay-bundle.sh acme
 
 RELAY_CENTRAL_URL="$relay_central_url" bash scripts/generate-relay-bundle.sh acme
 test -f relay/bundles/acme/logstash.yml

@@ -34,6 +34,7 @@ mkdir -p "$bundle_dir"
 
 "${PYTHON:-python3}" - "$repo_root" "$customer_slug" "$credential_id" <<'PY'
 from pathlib import Path
+import ipaddress
 import os
 import re
 import sys
@@ -55,6 +56,8 @@ if re.search(r'["\\]', central_url) or any(ord(ch) < 32 or ord(ch) == 127 for ch
         "ERROR: RELAY_CENTRAL_URL contains unsafe characters "
         "(quotes, backslashes, or control characters)."
     )
+if any(ch.isspace() for ch in central_url):
+    raise SystemExit("ERROR: RELAY_CENTRAL_URL must not contain whitespace.")
 parsed_central_url = urlparse(central_url)
 if parsed_central_url.scheme != "https":
     raise SystemExit("ERROR: RELAY_CENTRAL_URL must use https and include a host.")
@@ -62,6 +65,24 @@ if not parsed_central_url.netloc or not parsed_central_url.hostname:
     raise SystemExit("ERROR: RELAY_CENTRAL_URL must include a host.")
 if parsed_central_url.username or parsed_central_url.password:
     raise SystemExit("ERROR: RELAY_CENTRAL_URL must not include username or password.")
+try:
+    parsed_central_url.port
+except ValueError as exc:
+    raise SystemExit("ERROR: RELAY_CENTRAL_URL port must be a number between 0 and 65535.") from exc
+
+hostname = parsed_central_url.hostname.rstrip(".")
+try:
+    ipaddress.ip_address(hostname)
+except ValueError:
+    labels = hostname.split(".")
+    if (
+        not labels
+        or any(not label for label in labels)
+        or any(len(label) > 63 for label in labels)
+        or len(hostname) > 253
+        or any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", label) for label in labels)
+    ):
+        raise SystemExit("ERROR: RELAY_CENTRAL_URL host must be a valid DNS name or IP address.")
 
 from scripts.lib.gitops_config import enabled_sources_for_customer, make_jinja_env
 

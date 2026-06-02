@@ -42,13 +42,16 @@ if [[ "$repo_check" != "200" ]]; then
     404)
       printf "ERROR: snapshot repository '%s' not found (HTTP 404).\\n" "$SNAPSHOT_REPOSITORY" >&2
       cat >&2 <<'ERRMSG'
-Register it first, e.g.:
+Register the S3 snapshot repository first. For the default desired config in
+gitops/desired/global/backup.yml:
 
   curl --cacert "$OPENSEARCH_CA" -u "$OPENSEARCH_USER:$OPENSEARCH_PASSWORD" -XPUT "$OPENSEARCH_URL/_snapshot/$SNAPSHOT_REPOSITORY" \
     -H 'Content-Type: application/json' \
-    -d '{"type":"fs","settings":{"location":"/usr/share/opensearch/snapshots"}}'
+    -d '{"type":"s3","settings":{"bucket":"opensearch-siem-snapshots","base_path":"single-vm"}}'
 
-See: https://opensearch.org/docs/latest/tuning-your-cluster/availability-and-recovery/snapshots/snapshot-restore/
+Adjust bucket/base_path for your environment, and configure the OpenSearch S3
+repository plugin credentials before registration.
+See: https://docs.opensearch.org/docs/api-reference/snapshots/create-repository/
 ERRMSG
       ;;
     401|403)
