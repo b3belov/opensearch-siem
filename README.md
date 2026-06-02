@@ -68,10 +68,29 @@ echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-opensearch.conf
 sudo sysctl --system
 ```
 
-For a small local run, the default OpenSearch heap is `-Xms2g -Xmx2g`. On a
-sized VM, override `OPENSEARCH_JAVA_OPTS` in `.env`, for example
-`-Xms12g -Xmx12g`, and leave enough memory for the OS page cache, Logstash, and
-Dashboards.
+### Memory and resource configuration
+
+Default container memory limits assume a 32 GB VM:
+
+| Service               | `mem_limit` | JVM heap | Notes                   |
+|-----------------------|-------------|----------|-------------------------|
+| opensearch            | 6g          | 2g       | Heap + Lucene mmap + GC |
+| central-logstash      | 6g          | 2g       | Heap + persistent queue |
+| opensearch-dashboards | 1g          | n/a      | Node.js                 |
+| ingest-edge           | 512m        | n/a      | Python stdlib           |
+| backup-job            | 256m        | n/a      | curl + bash; backup profile only |
+
+**Tuning for smaller VMs:** reduce `mem_limit` and JVM heap proportionally. To
+adjust container memory limits, either edit the service `mem_limit` values in
+`docker-compose.yml` or provide a Compose override file with replacement
+`mem_limit` values.
+
+For a 16 GB VM, set opensearch/central-logstash to `mem_limit: 3g` with
+`-Xms1g -Xmx1g` heap. OpenSearch heap is configurable through
+`OPENSEARCH_JAVA_OPTS` in `.env`. Central Logstash heap is currently set through
+`LS_JAVA_OPTS` in Compose, so change it in `docker-compose.yml` or the same
+override file unless it is later parameterized. Monitor with
+`docker compose stats`.
 
 ## Local Setup
 
