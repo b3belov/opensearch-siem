@@ -13,15 +13,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.lib.opensearch_client import opensearch_auth, opensearch_verify
 
 
-def summarize_cluster(health: dict[str, Any], nodes_stats: dict[str, Any]) -> dict[str, Any]:
+def summarize_cluster(
+    health: dict[str, Any],
+    nodes_stats: dict[str, Any],
+    allocation: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     node = next(iter(nodes_stats.get("nodes", {}).values()), {})
     heap = node.get("jvm", {}).get("mem", {}).get("heap_used_percent")
-    return {
+    result: dict[str, Any] = {
         "status": health.get("status"),
         "nodes": health.get("number_of_nodes"),
         "active_shards": health.get("active_shards"),
+        "unassigned_shards": health.get("unassigned_shards"),
+        "relocating_shards": health.get("relocating_shards"),
         "heap_used_percent": heap,
     }
+    if allocation:
+        a = allocation[0]
+        result["disk_used"] = a.get("disk.used")
+        result["disk_avail"] = a.get("disk.avail")
+        result["disk_percent"] = a.get("disk.percent")
+    return result
 
 
 def summarize_streams(cat_indices: list[dict[str, Any]]) -> dict[str, Any]:
@@ -66,11 +78,13 @@ def main() -> None:
 
     report: dict[str, Any] = {}
     try:
+        alloc = _get(f"{os_url}/_cat/allocation?format=json&bytes=gb", auth)
         report["cluster"] = summarize_cluster(
             _get(f"{os_url}/_cluster/health", auth),
             _get(f"{os_url}/_nodes/stats/jvm", auth),
+            alloc,
         )
-        report["allocation"] = _get(f"{os_url}/_cat/allocation?format=json&bytes=gb", auth)
+        report["allocation"] = alloc
         report["streams"] = summarize_streams(
             # bound payload to managed streams; skip system/.kibana indices
             _get(f"{os_url}/_cat/indices/logs-*,alerts-*?format=json", auth)

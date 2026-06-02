@@ -21,6 +21,24 @@ def test_summarize_cluster_extracts_key_fields() -> None:
     assert out["heap_used_percent"] == 41
 
 
+def test_summarize_cluster_includes_unassigned_and_disk() -> None:
+    health = {
+        "status": "yellow",
+        "number_of_nodes": 1,
+        "active_shards": 12,
+        "unassigned_shards": 3,
+        "relocating_shards": 0,
+    }
+    nodes = {"nodes": {"n1": {"jvm": {"mem": {"heap_used_percent": 55}}}}}
+    alloc = [{"disk.used": "100gb", "disk.avail": "400gb", "disk.percent": "20"}]
+    out = status.summarize_cluster(health, nodes, alloc)
+    assert out["unassigned_shards"] == 3
+    assert out["relocating_shards"] == 0
+    assert out["disk_used"] == "100gb"
+    assert out["disk_avail"] == "400gb"
+    assert out["disk_percent"] == "20"
+
+
 def test_summarize_streams_separates_quarantine() -> None:
     cat = [
         {"index": "logs-acme-firewall", "docs.count": "100", "store.size": "1mb"},
