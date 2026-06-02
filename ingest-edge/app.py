@@ -206,10 +206,16 @@ class Handler(BaseHTTPRequestHandler):
         except requests.RequestException:
             self.reject(503, "upstream logstash unavailable")
             return
-        LOG.info(
-            "accept customer=%s credential=%s client_ip=%s upstream=%s",
-            credential["customerSlug"], username, client_ip, response.status_code,
-        )
+        if 200 <= response.status_code < 300:
+            LOG.info(
+                "accept customer=%s credential=%s client_ip=%s upstream=%s",
+                credential["customerSlug"], username, client_ip, response.status_code,
+            )
+        else:
+            LOG.warning(
+                "upstream_error customer=%s credential=%s client_ip=%s upstream=%s",
+                credential["customerSlug"], username, client_ip, response.status_code,
+            )
         self.send_response(response.status_code)
         self.send_header("Content-Length", str(len(response.content)))
         self.end_headers()

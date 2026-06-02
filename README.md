@@ -481,6 +481,15 @@ Sample lines:
 2026-06-01 12:00:01 INFO ingest-edge reject status=403 peer=203.0.113.99 credential='acme-primary' reason='invalid credential'
 ```
 
+Lines with `upstream_error` indicate Logstash returned a non-2xx status (e.g.,
+429 backpressure, 500 internal error). The event was forwarded but not
+successfully ingested. Investigate with:
+
+```bash
+docker compose logs central-logstash | tail -50
+.venv/bin/python scripts/siem-status.py  # check queue depth and DLQ
+```
+
 To filter by a specific credential:
 
 ```bash

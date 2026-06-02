@@ -282,6 +282,43 @@ def test_accept_emits_audit_log(monkeypatch, caplog) -> None:
     )
 
 
+def test_upstream_non_2xx_logged_as_upstream_error(monkeypatch, caplog) -> None:
+    import logging
+
+    class FakeResp:
+        status_code = 429
+        content = b'{"error":"backpressure"}'
+
+    def fake_post(url, json=None, timeout=None):
+        return FakeResp()
+
+    handler = object.__new__(app.Handler)
+    handler.headers = {"Authorization": basic("acme-primary", "secret"),
+                       "Content-Length": "2"}
+    handler.client_address = ("203.0.113.10", 12345)
+    handler.rfile = SimpleNamespace(read=lambda length: b"{}")
+    handler.wfile = SimpleNamespace(write=lambda b: None)
+    handler.send_response = lambda status: None
+    handler.send_header = lambda k, v: None
+    handler.end_headers = lambda: None
+
+    monkeypatch.setattr(app, "load_config", lambda: {
+        "credentials": {"acme-primary": {"enabled": True,
+            "secretRef": "secrets/local/customer-acme-password",
+            "customerSlug": "acme", "allowedCidrs": ["203.0.113.10/32"]}}})
+    monkeypatch.setattr(app, "secret_value", lambda ref: "secret")
+    monkeypatch.setattr(app.SESSION, "post", fake_post)
+
+    with caplog.at_level(logging.INFO, logger="ingest-edge"):
+        handler.do_POST()
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("upstream_error" in m and "429" in m for m in messages), \
+        f"expected upstream_error log, got: {messages}"
+    assert not any("accept" in m for m in messages), \
+        "non-2xx should not log 'accept'"
+
+
 def test_bounded_server_semaphore_size() -> None:
     server = app.BoundedThreadingHTTPServer(
         ("127.0.0.1", 0), app.Handler, max_concurrency=7
