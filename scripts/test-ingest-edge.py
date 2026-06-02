@@ -295,3 +295,17 @@ def test_bounded_server_semaphore_size() -> None:
 def test_module_uses_shared_session() -> None:
     import requests as _requests
     assert isinstance(app.SESSION, _requests.Session)
+
+
+def test_ssl_context_enforces_tls_1_2_minimum(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ssl
+
+    loaded: list[tuple[Path, Path]] = []
+
+    def load_cert_chain(self, certfile, keyfile):
+        loaded.append((certfile, keyfile))
+
+    monkeypatch.setattr(app.ssl.SSLContext, "load_cert_chain", load_cert_chain)
+    context = app.create_ssl_context()
+    assert context.minimum_version == ssl.TLSVersion.TLSv1_2
+    assert loaded == [(app.TLS_CERT_PATH, app.TLS_KEY_PATH)]

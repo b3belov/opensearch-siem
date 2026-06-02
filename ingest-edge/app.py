@@ -251,6 +251,14 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
             self._semaphore.release()
 
 
+def create_ssl_context() -> ssl.SSLContext:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.set_ciphers("ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!3DES:!MD5:!PSK")
+    context.load_cert_chain(certfile=TLS_CERT_PATH, keyfile=TLS_KEY_PATH)
+    return context
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -259,8 +267,7 @@ def main() -> None:
     host = os.environ.get("INGEST_EDGE_HOST", "0.0.0.0")
     port = int(os.environ.get("INGEST_EDGE_PORT", "5044"))
     server = BoundedThreadingHTTPServer((host, port), Handler, max_concurrency=MAX_CONCURRENCY)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(certfile=TLS_CERT_PATH, keyfile=TLS_KEY_PATH)
+    context = create_ssl_context()
     server.socket = context.wrap_socket(server.socket, server_side=True)
     LOG.info("ingest-edge listening host=%s port=%s max_concurrency=%s", host, port, MAX_CONCURRENCY)
     server.serve_forever()
