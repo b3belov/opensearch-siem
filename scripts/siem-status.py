@@ -42,10 +42,13 @@ def summarize_logstash(node_stats: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for pid, pdata in node_stats.get("pipelines", {}).items():
         events = pdata.get("events", {})
+        dlq = pdata.get("dead_letter_queue", {})
         result[pid] = {
             "in": events.get("in"),
             "out": events.get("out"),
             "queue_events": pdata.get("queue", {}).get("events"),
+            "dlq_size_bytes": dlq.get("queue_size_in_bytes"),
+            "dlq_max_bytes": dlq.get("max_queue_size_in_bytes"),
         }
     return result
 

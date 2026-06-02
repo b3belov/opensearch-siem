@@ -39,4 +39,37 @@ def test_summarize_logstash_reads_pipeline_events() -> None:
         "queue": {"events": 1}}}}
     out = status.summarize_logstash(node_stats)
     assert out["opensearch-output"]["in"] == 10
+    assert out["opensearch-output"]["out"] == 9
     assert out["opensearch-output"]["queue_events"] == 1
+
+
+def test_summarize_logstash_includes_dlq() -> None:
+    node_stats = {
+        "pipelines": {
+            "opensearch-output": {
+                "events": {"in": 10, "out": 9},
+                "queue": {"events": 1},
+                "dead_letter_queue": {
+                    "queue_size_in_bytes": 1048576,
+                    "max_queue_size_in_bytes": 536870912,
+                },
+            }
+        }
+    }
+    out = status.summarize_logstash(node_stats)
+    assert out["opensearch-output"]["dlq_size_bytes"] == 1048576
+    assert out["opensearch-output"]["dlq_max_bytes"] == 536870912
+
+
+def test_summarize_logstash_handles_missing_dlq() -> None:
+    node_stats = {
+        "pipelines": {
+            "relay-input": {
+                "events": {"in": 5, "out": 5},
+                "queue": {"events": 0},
+            }
+        }
+    }
+    out = status.summarize_logstash(node_stats)
+    assert out["relay-input"]["dlq_size_bytes"] is None
+    assert out["relay-input"]["dlq_max_bytes"] is None

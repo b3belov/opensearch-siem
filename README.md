@@ -413,6 +413,21 @@ OPENSEARCH_PASSWORD="$OPENSEARCH_ADMIN_PASSWORD" \
 Reports cluster status, heap %, disk allocation, per-stream doc counts, total
 quarantine docs, and Logstash pipeline throughput / queue depth.
 
+### Understanding dead letter queue (DLQ) output
+
+`siem-status.py` reports `dlq_size_bytes` and `dlq_max_bytes` per pipeline.
+The DLQ holds events that failed processing (e.g., mapping errors, filter
+exceptions). When `dlq_size_bytes` approaches `dlq_max_bytes` (default
+512 MB), new failures are silently dropped.
+
+**What to do when DLQ is growing:**
+
+1. Check Logstash logs: `docker compose logs central-logstash | grep -i error`
+2. Identify the failing pipeline and fix the root cause (bad mapping, filter bug)
+3. Inspect and replay DLQ entries with a Logstash `dead_letter_queue` input pipeline
+4. After confirmed consumed/fixed, use `clean_consumed` where appropriate, or stop
+   the pipeline and clear DLQ segment files according to Logstash guidance
+
 `OPENSEARCH_URL` defaults to `https://127.0.0.1:9200`. **Set it explicitly for a
 remote cluster** (e.g. `OPENSEARCH_URL=https://opensearch.internal:9200`) — the
 same default applies to `scripts/reconcile-opensearch-gitops.py`, so an unset
