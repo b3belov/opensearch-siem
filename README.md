@@ -335,6 +335,7 @@ PYTHON=.venv/bin/python bash scripts/test-rendered-gitops-config.sh
 PYTHON=.venv/bin/python bash scripts/test-opensearch-reconciler.sh
 PYTHON=.venv/bin/python bash scripts/test-ingest-edge.sh
 bash scripts/test-target-compose.sh
+bash scripts/test-local-env.sh
 bash scripts/test-secret-ignore.sh
 RELAY_CENTRAL_URL=https://siem.example.com:5044 PYTHON=.venv/bin/python bash scripts/test-relay-bundle.sh
 bash scripts/test-logstash-config.sh

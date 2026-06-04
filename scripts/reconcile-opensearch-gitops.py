@@ -155,16 +155,37 @@ def update_existing_ism_policy(base_url: str, path: str, body: dict) -> requests
     )
 
 
+def is_security_api_path(path: str) -> bool:
+    return path.startswith("/_plugins/_security/api/")
+
+
+def opensearch_admin_cert() -> tuple[str, str]:
+    return (
+        os.environ.get("OPENSEARCH_ADMIN_CERT", str(REPO_ROOT / "secrets/certs/admin.crt")),
+        os.environ.get("OPENSEARCH_ADMIN_KEY", str(REPO_ROOT / "secrets/certs/admin.key")),
+    )
+
+
+def put_json_kwargs(path: str, body: dict) -> dict:
+    kwargs = {
+        "json": body,
+        "verify": opensearch_verify(),
+        "timeout": 30,
+    }
+    if is_security_api_path(path):
+        kwargs["cert"] = opensearch_admin_cert()
+    else:
+        kwargs["auth"] = opensearch_auth()
+    return kwargs
+
+
 def put_json(base_url: str, path: str, body: dict, dry_run: bool) -> None:
     if dry_run:
         LOG.info("DRY-RUN PUT %s", path)
         return
     response = requests.put(
         f"{base_url}{path}",
-        auth=opensearch_auth(),
-        json=body,
-        verify=opensearch_verify(),
-        timeout=30,
+        **put_json_kwargs(path, body),
     )
     if response.status_code == 409 and path.startswith("/_plugins/_ism/policies/"):
         response = update_existing_ism_policy(base_url, path, body)

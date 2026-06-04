@@ -1,5 +1,6 @@
 {
   "index_patterns": ["alerts-*"],
+  "data_stream": {},
   "template": {
     "settings": {
       "index.number_of_shards": 1,

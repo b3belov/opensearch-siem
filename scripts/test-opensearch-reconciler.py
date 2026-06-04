@@ -64,6 +64,37 @@ def test_put_json_updates_existing_ism_policy_with_concurrency_token(monkeypatch
     ]
 
 
+def test_put_json_uses_admin_cert_for_security_api(monkeypatch) -> None:
+    seen_kwargs: list[dict[str, Any]] = []
+
+    def fake_put(url: str, **kwargs: Any) -> FakeResponse:
+        seen_kwargs.append(kwargs)
+        return FakeResponse(200)
+
+    monkeypatch.delenv("OPENSEARCH_USER", raising=False)
+    monkeypatch.delenv("OPENSEARCH_PASSWORD", raising=False)
+    monkeypatch.setenv("OPENSEARCH_CA", "ca.pem")
+    monkeypatch.setenv("OPENSEARCH_ADMIN_CERT", "admin.crt")
+    monkeypatch.setenv("OPENSEARCH_ADMIN_KEY", "admin.key")
+    monkeypatch.setattr(reconciler.requests, "put", fake_put)
+
+    reconciler.put_json(
+        "https://opensearch.local",
+        "/_plugins/_security/api/roles/logstash_writer",
+        {"cluster_permissions": []},
+        dry_run=False,
+    )
+
+    assert seen_kwargs == [
+        {
+            "json": {"cluster_permissions": []},
+            "verify": "ca.pem",
+            "timeout": 30,
+            "cert": ("admin.crt", "admin.key"),
+        }
+    ]
+
+
 def test_orphaned_templates_detects_extras() -> None:
     desired = {"logs-acme-firewall-template", "logs-acme-firewall-quarantine-template"}
     existing = [

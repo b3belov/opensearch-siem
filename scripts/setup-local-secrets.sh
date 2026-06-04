@@ -76,7 +76,7 @@ cat > .env <<EOF
 OPENSEARCH_ADMIN_PASSWORD=$(cat secrets/local/opensearch-admin-password)
 LOGSTASH_WRITER_USER=logstash_writer
 LOGSTASH_WRITER_PASSWORD=$(cat secrets/local/logstash-writer-password)
-OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g
+OPENSEARCH_JAVA_OPTS="-Xms2g -Xmx2g"
 BACKUP_ENABLED=false
 TRUSTED_PROXY_CIDRS=
 OPENSEARCH_CA=secrets/certs/root-ca.crt
