@@ -2,7 +2,7 @@
 
 **Plan:** [2026-06-10-customer-forwarder-logstash.md](./2026-06-10-customer-forwarder-logstash.md)
 **Status:** in-progress
-**Verified at commit:** pending-iteration-2
+**Verified at commit:** 738dbb2ee041a55d8c3a88c23d1a214631fdf124
 
 ---
 
@@ -218,4 +218,4 @@
 
 ### Iteration summary
 - Findings raised: 12 | applied: 12 | rejected: 0 | deferred: 0
-- Plan commit: pending-iteration-2
+- Plan commit: 738dbb2ee041a55d8c3a88c23d1a214631fdf124
