@@ -4,7 +4,7 @@
 
 **Goal:** Build a static reusable customer-side Logstash forwarder package with a central `source_id` catalog, v1 Windows AD/Sysmon/syslog parser paths, persistent queueing, and validation that keeps customer forwarder config aligned with central GitOps.
 
-**Architecture:** The main repo owns `source-catalog/sources.yml` as the canonical source vocabulary. Central GitOps validates customer source records against that catalog, while `customer-forwarder/` ships a copied catalog snapshot plus local validation/render scripts that generate the enabled Logstash input pipeline and queue settings. The forwarder sends normalized JSON objects to central `ingest-edge`; central `ingest-edge` remains responsible for trusted customer identity. Version one intentionally keeps object-per-request delivery and adds conservative Logstash pipeline sizing plus validation so the static package is predictable on small customer hosts.
+**Architecture:** The main repo owns `source-catalog/sources.yml` as the canonical source vocabulary. Central GitOps validates customer source records against that catalog, while `customer-forwarder/` ships a copied catalog snapshot plus local validation/render scripts that generate the enabled Logstash input pipeline and queue settings. Input templates write configured source metadata only to Logstash `@metadata`; an early parser stage removes spoofable routing fields from the event body and then writes canonical `siem.source_id`, `event.dataset`, and `observer.name` from that trusted metadata. The forwarder sends normalized JSON objects to central `ingest-edge`; central `ingest-edge` remains responsible for trusted customer identity. Version one intentionally keeps object-per-request delivery and adds conservative Logstash pipeline sizing, disk-headroom validation, container resource guardrails, and validation so the static package is predictable on small customer hosts.
 
 **Tech Stack:** Python 3.11, PyYAML, jsonschema, pytest, Docker Compose, Logstash OSS with HTTP/syslog inputs and HTTP output.
 
@@ -20,17 +20,17 @@ Create or modify these files:
 - Modify `scripts/render-gitops-config.py`: load the source catalog and remove stale managed rendered index templates when desired sources change.
 - Create `scripts/test-source-catalog.py`: pytest coverage for catalog uniqueness and central GitOps catalog enforcement.
 - Modify `scripts/test-gitops-config.sh`: include `scripts/test-source-catalog.py`.
-- Modify `gitops/schemas/source.schema.json`: update supported parser enum to the v1 catalog parser names.
+- Modify `gitops/schemas/source.schema.json`: keep the parser field syntactically safe while exact parser values are enforced by `source-catalog/sources.yml`.
 - Replace sample sources under `gitops/desired/customers/acme/sources/`: migrate from `firewall`/`windows` to `generic-syslog`, `windows-ad`, and `windows-sysmon`.
 - Update generated files under `gitops/rendered/**` by running `scripts/render-gitops-config.py`.
-- Modify `scripts/test-relay-bundle.sh`: update relay-bundle expectations to the new source IDs.
+- Modify `scripts/generate-relay-bundle.sh` and `scripts/test-relay-bundle.sh`: keep the legacy relay bundle syslog-only and prove non-syslog catalog inputs are excluded.
 - Create `customer-forwarder/**`: static customer-side package, local config, rendered Logstash config, parser pipelines, scripts, tests, fixtures, and README.
 - Create `scripts/test-customer-forwarder.sh`: top-level wrapper for forwarder validation/tests.
 - Modify `.gitignore`: ignore `customer-forwarder/data/`, `customer-forwarder/logs/`, `customer-forwarder/tmp/`, and customer-local secret/cert material.
 - Modify `scripts/test-secret-ignore.sh`: assert customer-forwarder runtime/secret paths stay ignored.
 - Modify `README.md`: document the controlled source catalog and point operators to `customer-forwarder/`.
 
-Do not remove the existing `relay/` bundle generator in this implementation. It remains a compatibility/simple-relay path and should continue to pass tests using the new catalog source IDs.
+Do not remove the existing `relay/` bundle generator in this implementation. It remains a compatibility/simple-relay path for catalog entries whose `input` is `syslog`; Windows AD and Sysmon use the new `customer-forwarder/` HTTP JSON inputs instead of being represented as legacy syslog relay listeners.
 
 ---
 
@@ -189,13 +189,19 @@ Create `source-catalog/sources.schema.json`:
 }
 ```
 
-- [ ] **Step 4: Update the central source schema parser enum**
+- [ ] **Step 4: Update the central source schema parser field**
 
-In `gitops/schemas/source.schema.json`, replace the `parser` enum with:
+In `gitops/schemas/source.schema.json`, replace the duplicated `parser` enum
+with a safe string pattern:
 
 ```json
-"parser": { "type": "string", "enum": ["generic-syslog", "windows-ad-json", "windows-sysmon-json"] },
+"parser": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,40}$" },
 ```
+
+Do not duplicate the parser enum in this GitOps source schema. Exact parser
+membership is enforced by `load_source_catalog()` plus the per-source catalog
+match in `load_sources()`, so adding a future parser requires changing the
+catalog once instead of updating two enums.
 
 - [ ] **Step 5: Implement catalog loading and enforcement**
 
@@ -356,6 +362,7 @@ Do not commit yet.
 - Modify generated: `gitops/rendered/**`
 - Modify: `scripts/render-gitops-config.py`
 - Modify: `scripts/test-rendered-gitops-config.sh`
+- Modify: `scripts/generate-relay-bundle.sh`
 - Modify: `scripts/test-relay-bundle.sh`
 - Modify: `README.md`
 
@@ -486,19 +493,62 @@ test ! -e gitops/rendered/opensearch/index-templates/logs-acme-firewall-template
 test ! -e gitops/rendered/opensearch/index-templates/logs-acme-windows-template.json
 ```
 
-- [ ] **Step 4: Update relay bundle test expectations**
+- [ ] **Step 4: Keep the legacy relay bundle syslog-only**
+
+Update `scripts/lib/gitops_config.py` so `enabled_sources_for_customer()`
+filters by the canonical catalog input type. The relay bundle must render only
+sources with `input: syslog`; non-syslog sources are handled by
+`customer-forwarder/` and must not silently become syslog listeners.
+
+Replace `enabled_sources_for_customer()` with:
+
+```python
+def enabled_sources_for_customer(customer_slug: str) -> list[dict[str, str]]:
+    """Return enabled syslog-compatible sources for the legacy relay bundle."""
+    source_dir = DESIRED / "customers" / customer_slug / "sources"
+    source_catalog = load_source_catalog()
+    result: list[dict[str, str]] = []
+    for path in sorted(source_dir.glob("*.yml")):
+        doc = read_yaml(path)
+        if not doc.get("enabled", False):
+            continue
+        catalog_entry = source_catalog.get(doc["id"])
+        if catalog_entry is None:
+            raise ValueError(f"{path}: source id {doc['id']} is not in source catalog")
+        if catalog_entry.input != "syslog":
+            continue
+        result.append({"id": doc["id"], "dataset": doc["dataset"]})
+    return result
+```
+
+In `scripts/generate-relay-bundle.sh`, change the no-source error from:
+
+```python
+if not sources:
+    raise SystemExit(f"no enabled sources for customer {customer_slug}")
+```
+
+to:
+
+```python
+if not sources:
+    raise SystemExit(f"no enabled syslog-compatible sources for customer {customer_slug}")
+```
 
 In `scripts/test-relay-bundle.sh`, replace the final source assertions with:
 
 ```bash
 bundle_dir="relay/bundles/acme"
 grep -q 'port => 5514' "$bundle_dir/pipeline.conf" || { echo "missing generic-syslog port"; exit 1; }
-grep -q 'port => 5515' "$bundle_dir/pipeline.conf" || { echo "missing windows-ad port"; exit 1; }
-grep -q 'port => 5516' "$bundle_dir/pipeline.conf" || { echo "missing windows-sysmon port"; exit 1; }
 grep -q '\[siem\]\[source_id\]" => "generic-syslog"' "$bundle_dir/pipeline.conf" || { echo "missing generic-syslog source_id"; exit 1; }
-grep -q '\[siem\]\[source_id\]" => "windows-ad"' "$bundle_dir/pipeline.conf" || { echo "missing windows-ad source_id"; exit 1; }
-grep -q '\[siem\]\[source_id\]" => "windows-sysmon"' "$bundle_dir/pipeline.conf" || { echo "missing windows-sysmon source_id"; exit 1; }
+! grep -q 'port => 5515' "$bundle_dir/pipeline.conf" || { echo "unexpected windows-ad syslog port"; exit 1; }
+! grep -q 'port => 5516' "$bundle_dir/pipeline.conf" || { echo "unexpected windows-sysmon syslog port"; exit 1; }
+! grep -q '\[siem\]\[source_id\]" => "windows-ad"' "$bundle_dir/pipeline.conf" || { echo "unexpected windows-ad source_id in relay"; exit 1; }
+! grep -q '\[siem\]\[source_id\]" => "windows-sysmon"' "$bundle_dir/pipeline.conf" || { echo "unexpected windows-sysmon source_id in relay"; exit 1; }
 ```
+
+Also assert the generated relay README contains only `generic-syslog: udp/tcp
+5514` from the v1 catalog sample.
 
 - [ ] **Step 5: Update README examples**
 
@@ -592,11 +642,16 @@ git commit -m "feat(gitops): enforce source catalog"
 Create `customer-forwarder/requirements.txt`:
 
 ```text
-Jinja2==3.1.4
+Jinja2==3.1.6
 jsonschema==4.23.0
 PyYAML==6.0.2
 pytest==8.3.3
 ```
+
+Do not pin Jinja2 below `3.1.6`; the customer-distributed package should not
+start with an avoidably stale template dependency. If implementation time has a
+newer patched 3.1.x baseline, use that version and keep the pin in the 3.1
+series unless compatibility is deliberately re-tested.
 
 - [ ] **Step 2: Copy the central source catalog and schema**
 
@@ -750,6 +805,39 @@ def test_catalog_schema_is_validated(tmp_path: Path) -> None:
         forwarder_config.load_validated_config(tmp_path)
 
 
+def test_catalog_rejects_duplicate_datasets(tmp_path: Path) -> None:
+    forwarder_config.copy_tree(ROOT / "config", tmp_path / "config")
+    catalog = forwarder_config.read_yaml(tmp_path / "config" / "source-catalog.yml")
+    catalog["sources"][1]["dataset"] = catalog["sources"][0]["dataset"]
+    forwarder_config.write_yaml(tmp_path / "config" / "source-catalog.yml", catalog)
+
+    with pytest.raises(ValueError, match="duplicate source catalog dataset"):
+        forwarder_config.load_validated_config(tmp_path)
+
+
+def test_queue_size_validation_rejects_oversized_dlq(tmp_path: Path) -> None:
+    forwarder_config.copy_tree(ROOT / "config", tmp_path / "config")
+    doc = forwarder_config.read_yaml(tmp_path / "config" / "forwarder.yml")
+    doc["queue"]["max_bytes"] = "512mb"
+    doc["queue"]["dlq_max_bytes"] = "1gb"
+    forwarder_config.write_yaml(tmp_path / "config" / "forwarder.yml", doc)
+
+    with pytest.raises(ValueError, match="dlq_max_bytes must be less than or equal to max_bytes"):
+        forwarder_config.load_validated_config(tmp_path)
+
+
+def test_disk_headroom_uses_queue_and_dlq_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    forwarder_config.copy_tree(ROOT / "config", tmp_path / "config")
+    config = forwarder_config.load_validated_config(tmp_path)
+
+    class Usage:
+        free = 1
+
+    monkeypatch.setattr(forwarder_config.shutil, "disk_usage", lambda _path: Usage())
+    with pytest.raises(ValueError, match="insufficient free disk"):
+        forwarder_config.check_disk_headroom(tmp_path, config)
+
+
 def test_render_inputs_omits_disabled_source(tmp_path: Path) -> None:
     forwarder_config.copy_tree(ROOT / "config", tmp_path / "config")
     forwarder_config.copy_tree(ROOT / "templates", tmp_path / "templates")
@@ -776,6 +864,17 @@ def test_render_logstash_uses_queue_settings(tmp_path: Path) -> None:
     rendered = forwarder_config.render_logstash(tmp_path, config)
     assert "queue.max_bytes: 16gb" in rendered
     assert "dead_letter_queue.max_bytes: 1gb" in rendered
+
+
+def test_render_inputs_uses_canonical_metadata_and_observer_name(tmp_path: Path) -> None:
+    forwarder_config.copy_tree(ROOT / "config", tmp_path / "config")
+    forwarder_config.copy_tree(ROOT / "templates", tmp_path / "templates")
+
+    config = forwarder_config.load_validated_config(tmp_path)
+    rendered = forwarder_config.render_inputs(tmp_path, config)
+    assert '"[@metadata][forwarder][source_id]" => "windows-ad"' in rendered
+    assert '"[siem][source_id]" => "windows-ad"' not in rendered
+    assert '"[@metadata][forwarder][observer_name]" => "customer-forwarder-01"' in rendered
 ```
 
 - [ ] **Step 6: Run the new tests and verify they fail**
@@ -807,6 +906,9 @@ from jsonschema import Draft202012Validator
 
 
 SAFE_LOGSTASH_STRING = re.compile(r"^[A-Za-z0-9._:-]+$")
+SIZE_RE = re.compile(r"^(?P<amount>[1-9][0-9]*)(?P<unit>mb|gb)$")
+MIN_QUEUE_BYTES = 64 * 1024 * 1024
+MAX_QUEUE_BYTES = 1024 * 1024 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -832,6 +934,7 @@ class ForwarderConfig:
                 "dataset": catalog_entry["dataset"],
                 "parser": catalog_entry["parser"],
                 "input": catalog_entry["input"],
+                "forwarder_name": self.raw["forwarder_name"],
                 "listen_host": settings["listen_host"],
                 "port": settings["port"],
             })
@@ -872,6 +975,15 @@ def validate_schema(document: dict[str, Any], schema: dict[str, Any], path: Path
         raise ValueError(f"{path}: {rendered}")
 
 
+def parse_size_bytes(value: str) -> int:
+    match = SIZE_RE.fullmatch(value)
+    if not match:
+        raise ValueError(f"invalid size {value!r}; expected values like 512mb or 8gb")
+    amount = int(match.group("amount"))
+    multiplier = 1024 * 1024 if match.group("unit") == "mb" else 1024 * 1024 * 1024
+    return amount * multiplier
+
+
 def load_catalog(root: Path) -> dict[str, dict[str, Any]]:
     catalog_path = root / "config" / "source-catalog.yml"
     schema_path = root / "config" / "source-catalog.schema.json"
@@ -882,10 +994,15 @@ def load_catalog(root: Path) -> dict[str, dict[str, Any]]:
     if not isinstance(entries, list):
         raise ValueError(f"{catalog_path}: sources must be a list")
     result: dict[str, dict[str, Any]] = {}
+    seen_datasets: set[str] = set()
     for entry in entries:
         source_id = entry["id"]
+        dataset = entry["dataset"]
         if source_id in result:
             raise ValueError(f"{catalog_path}: duplicate source id {source_id}")
+        if dataset in seen_datasets:
+            raise ValueError(f"{catalog_path}: duplicate source catalog dataset {dataset}")
+        seen_datasets.add(dataset)
         result[source_id] = entry
     return result
 
@@ -897,6 +1014,15 @@ def load_validated_config(root: Path) -> ForwarderConfig:
     config = read_yaml(config_path)
     validate_schema(config, schema, config_path)
     catalog = load_catalog(root)
+
+    queue_max = parse_size_bytes(config["queue"]["max_bytes"])
+    dlq_max = parse_size_bytes(config["queue"]["dlq_max_bytes"])
+    if queue_max < MIN_QUEUE_BYTES:
+        raise ValueError(f"{config_path}: queue.max_bytes must be at least 64mb")
+    if queue_max > MAX_QUEUE_BYTES:
+        raise ValueError(f"{config_path}: queue.max_bytes must be 1024gb or less")
+    if dlq_max > queue_max:
+        raise ValueError(f"{config_path}: queue.dlq_max_bytes must be less than or equal to max_bytes")
 
     enabled_ports: dict[int, str] = {}
     for source_id, settings in config["sources"].items():
@@ -934,6 +1060,24 @@ def render_logstash(root: Path, config: ForwarderConfig) -> str:
     return template.render(queue=config.queue_settings()).rstrip() + "\n"
 
 
+def required_queue_disk_bytes(config: ForwarderConfig) -> int:
+    queue_max = parse_size_bytes(config.raw["queue"]["max_bytes"])
+    dlq_max = parse_size_bytes(config.raw["queue"]["dlq_max_bytes"])
+    return int((queue_max + dlq_max) * 1.2)
+
+
+def check_disk_headroom(root: Path, config: ForwarderConfig) -> None:
+    data_dir = root / "data" / "logstash"
+    probe_dir = data_dir if data_dir.exists() else root
+    free = shutil.disk_usage(probe_dir).free
+    required = required_queue_disk_bytes(config)
+    if free < required:
+        raise ValueError(
+            f"{data_dir}: insufficient free disk for persistent queue and DLQ; "
+            f"need at least {required} bytes with 20% headroom, have {free}"
+        )
+
+
 def write_rendered_inputs(root: Path, config: ForwarderConfig) -> Path:
     path = root / "pipeline" / "00-inputs.conf"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -955,14 +1099,21 @@ Create `customer-forwarder/scripts/validate-config.py`:
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
-from forwarder_config import load_validated_config
+from forwarder_config import check_disk_headroom, load_validated_config
 
 
 def main() -> None:
-    root = Path(__file__).resolve().parents[1]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--skip-disk-check", action="store_true")
+    args = parser.parse_args()
+    root = args.root
     config = load_validated_config(root)
+    if not args.skip_disk_check:
+        check_disk_headroom(root, config)
     print(f"customer forwarder config valid ({len(config.enabled_source_ids())} enabled sources)")
 
 
@@ -1020,9 +1171,9 @@ input {
     port => {{ source.port }}
     ecs_compatibility => "v8"
     add_field => {
-      "[siem][source_id]" => "{{ source.id }}"
-      "[event][dataset]" => "{{ source.dataset }}"
-      "[observer][type]" => "customer-forwarder"
+      "[@metadata][forwarder][source_id]" => "{{ source.id }}"
+      "[@metadata][forwarder][dataset]" => "{{ source.dataset }}"
+      "[@metadata][forwarder][observer_name]" => "{{ source.forwarder_name }}"
     }
   }
 }
@@ -1035,9 +1186,9 @@ input {
     codec => "json"
     max_content_length => 1048576
     add_field => {
-      "[siem][source_id]" => "{{ source.id }}"
-      "[event][dataset]" => "{{ source.dataset }}"
-      "[observer][type]" => "customer-forwarder"
+      "[@metadata][forwarder][source_id]" => "{{ source.id }}"
+      "[@metadata][forwarder][dataset]" => "{{ source.dataset }}"
+      "[@metadata][forwarder][observer_name]" => "{{ source.forwarder_name }}"
     }
   }
 }
@@ -1063,7 +1214,7 @@ PYTHONPATH=customer-forwarder/scripts .venv/bin/python customer-forwarder/script
 Expected:
 
 ```text
-7 passed
+11 passed
 customer forwarder config valid (3 enabled sources)
 rendered config/logstash.yml
 rendered pipeline/00-inputs.conf
@@ -1107,7 +1258,8 @@ CENTRAL_INGEST_URL=https://siem.example.com:5044/
 CUSTOMER_FORWARDER_USERNAME=<credential-id-from-central-gitops>
 CUSTOMER_FORWARDER_PASSWORD=<credential-password>
 CENTRAL_CA_CERT=/usr/share/logstash/config/certs/central-ca.crt
-LS_JAVA_OPTS=-Xms512m -Xmx512m
+LS_JAVA_OPTS="-Xms512m -Xmx512m"
+FORWARDER_MEM_LIMIT=1g
 ```
 
 - [ ] **Step 2: Add Docker Compose**
@@ -1115,19 +1267,27 @@ LS_JAVA_OPTS=-Xms512m -Xmx512m
 Create `customer-forwarder/docker-compose.yml`:
 
 ```yaml
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   customer-forwarder:
     image: opensearchproject/logstash-oss-with-opensearch-output-plugin:8.9.0
     container_name: customer-forwarder
     restart: unless-stopped
+    mem_limit: ${FORWARDER_MEM_LIMIT:-1g}
+    logging: *default-logging
     env_file:
       - .env
     environment:
-      - LS_JAVA_OPTS=${LS_JAVA_OPTS:-"-Xms512m -Xmx512m"}
-      - CENTRAL_INGEST_URL=${CENTRAL_INGEST_URL}
-      - CUSTOMER_FORWARDER_USERNAME=${CUSTOMER_FORWARDER_USERNAME}
-      - CUSTOMER_FORWARDER_PASSWORD=${CUSTOMER_FORWARDER_PASSWORD}
-      - CENTRAL_CA_CERT=${CENTRAL_CA_CERT:-/usr/share/logstash/config/certs/central-ca.crt}
+      LS_JAVA_OPTS: ${LS_JAVA_OPTS:--Xms512m -Xmx512m}
+      CENTRAL_INGEST_URL: ${CENTRAL_INGEST_URL}
+      CUSTOMER_FORWARDER_USERNAME: ${CUSTOMER_FORWARDER_USERNAME}
+      CUSTOMER_FORWARDER_PASSWORD: ${CUSTOMER_FORWARDER_PASSWORD}
+      CENTRAL_CA_CERT: ${CENTRAL_CA_CERT:-/usr/share/logstash/config/certs/central-ca.crt}
     volumes:
       - ./config:/usr/share/logstash/config:ro
       - ./pipeline:/usr/share/logstash/pipeline:ro
@@ -1197,7 +1357,33 @@ input {
     address => "parse-and-normalize"
   }
 }
+
+filter {
+  mutate {
+    remove_field => [
+      "[siem]",
+      "[customer]",
+      "[data_stream]",
+      "[@metadata][target_index]",
+      "[@metadata][target_stream]"
+    ]
+  }
+
+  mutate {
+    replace => {
+      "[siem][source_id]" => "%{[@metadata][forwarder][source_id]}"
+      "[event][dataset]" => "%{[@metadata][forwarder][dataset]}"
+      "[observer][type]" => "customer-forwarder"
+      "[observer][name]" => "%{[@metadata][forwarder][observer_name]}"
+    }
+  }
+}
 ```
+
+This file is the canonicalization boundary. It deliberately discards
+client-supplied routing fields before parser branching so a sender on one local
+collector port cannot spoof another `siem.source_id`, `customer`,
+`data_stream`, or output-routing metadata value.
 
 Create `customer-forwarder/pipeline/20-parse-windows-ad.conf`:
 
@@ -1357,30 +1543,81 @@ Create `customer-forwarder/scripts/validate-env.py`:
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import os
 import ipaddress
 import re
+import ssl
 from pathlib import Path
 from urllib.parse import urlparse
 
 
-UNSAFE = re.compile(r'["\\\s]|[\x00-\x1f\x7f]')
-
-
+CERT_PREFIX = "/usr/share/logstash/config/certs/"
+KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+SIZE_RE = re.compile(r"^(?P<amount>[1-9][0-9]*)(?P<unit>m|g)$")
+HEAP_RE = re.compile(r"^-Xms(?P<xms>[1-9][0-9]*[mg])\s+-Xmx(?P<xmx>[1-9][0-9]*[mg])$")
+ALLOWED_KEYS = {
+    "CENTRAL_INGEST_URL",
+    "CUSTOMER_FORWARDER_USERNAME",
+    "CUSTOMER_FORWARDER_PASSWORD",
+    "CENTRAL_CA_CERT",
+    "LS_JAVA_OPTS",
+    "FORWARDER_MEM_LIMIT",
+}
 def fail(message: str) -> None:
     raise SystemExit(f"ERROR: {message}")
 
 
-def require(name: str) -> str:
-    value = os.environ.get(name, "")
+def parse_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            fail(f"{path}:{lineno}: export syntax is not supported")
+        if "=" not in line:
+            fail(f"{path}:{lineno}: expected KEY=value")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not KEY_RE.fullmatch(key):
+            fail(f"{path}:{lineno}: invalid environment key {key!r}")
+        if key not in ALLOWED_KEYS:
+            fail(f"{path}:{lineno}: unsupported environment key {key}")
+        if value.startswith(("'", '"')):
+            quote = value[0]
+            if len(value) < 2 or value[-1] != quote:
+                fail(f"{path}:{lineno}: unmatched quote for {key}")
+            value = value[1:-1]
+        if "$(" in value or "`" in value:
+            fail(f"{path}:{lineno}: command substitution is not allowed in {key}")
+        values[key] = value
+    return values
+
+
+def require(values: dict[str, str], name: str) -> str:
+    value = values.get(name, "")
     if not value:
         fail(f"{name} is required")
-    if UNSAFE.search(value):
-        fail(f"{name} contains unsafe characters")
+    if CONTROL_RE.search(value):
+        fail(f"{name} contains control characters")
     return value
 
 
+def parse_size_bytes(value: str) -> int:
+    match = SIZE_RE.fullmatch(value.lower())
+    if not match:
+        fail(f"invalid size {value!r}; expected values like 512m or 1g")
+    amount = int(match.group("amount"))
+    multiplier = 1024 * 1024 if match.group("unit") == "m" else 1024 * 1024 * 1024
+    return amount * multiplier
+
+
 def validate_url(value: str) -> None:
+    if any(ch.isspace() for ch in value):
+        fail("CENTRAL_INGEST_URL must not contain whitespace")
     parsed = urlparse(value)
     if parsed.scheme != "https":
         fail("CENTRAL_INGEST_URL must use https")
@@ -1408,26 +1645,69 @@ def validate_url(value: str) -> None:
 
 
 def host_ca_path(root: Path, container_path: str) -> Path:
-    prefix = "/usr/share/logstash/config/certs/"
-    if container_path.startswith(prefix):
-        return root / "certs" / container_path.removeprefix(prefix)
-    return Path(container_path)
+    if not container_path.startswith(CERT_PREFIX):
+        fail(f"CENTRAL_CA_CERT must be under {CERT_PREFIX}")
+    relative = container_path.removeprefix(CERT_PREFIX)
+    if not relative or ".." in Path(relative).parts:
+        fail("CENTRAL_CA_CERT must not contain path traversal")
+    certs_root = (root / "certs").resolve()
+    ca_path = (certs_root / relative).resolve()
+    if not ca_path.is_relative_to(certs_root):
+        fail("CENTRAL_CA_CERT must resolve under customer-forwarder/certs")
+    return ca_path
+
+
+def validate_ca(root: Path, container_path: str) -> None:
+    ca_path = host_ca_path(root, container_path)
+    if not ca_path.is_file():
+        fail(f"CENTRAL_CA_CERT host file is missing: {ca_path}")
+    content = ca_path.read_text(encoding="utf-8", errors="replace").strip()
+    if not content.startswith("-----BEGIN CERTIFICATE-----"):
+        fail("CENTRAL_CA_CERT must be a non-empty PEM certificate")
+    try:
+        ssl.PEM_cert_to_DER_cert(content)
+    except ValueError as exc:
+        fail(f"CENTRAL_CA_CERT is not parseable PEM: {exc}")
+
+
+def validate_heap(values: dict[str, str]) -> None:
+    heap = values.get("LS_JAVA_OPTS", "-Xms512m -Xmx512m")
+    match = HEAP_RE.fullmatch(heap)
+    if not match:
+        fail('LS_JAVA_OPTS must look like "-Xms512m -Xmx512m"')
+    xms = parse_size_bytes(match.group("xms"))
+    xmx = parse_size_bytes(match.group("xmx"))
+    if xms != xmx:
+        fail("LS_JAVA_OPTS must use matching Xms and Xmx for predictable sizing")
+    mem_limit = parse_size_bytes(values.get("FORWARDER_MEM_LIMIT", "1g"))
+    if xmx > int(mem_limit * 0.75):
+        fail("LS_JAVA_OPTS Xmx must be no more than 75% of FORWARDER_MEM_LIMIT")
 
 
 def main() -> None:
-    root = Path(__file__).resolve().parents[1]
-    url = require("CENTRAL_INGEST_URL")
-    username = require("CUSTOMER_FORWARDER_USERNAME")
-    password = require("CUSTOMER_FORWARDER_PASSWORD")
-    ca_cert = require("CENTRAL_CA_CERT")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--env-file", type=Path)
+    args = parser.parse_args()
+
+    values = {key: value for key, value in os.environ.items() if key in ALLOWED_KEYS}
+    env_file = args.env_file if args.env_file else args.root / ".env"
+    if env_file.exists():
+        values.update(parse_env_file(env_file))
+
+    url = require(values, "CENTRAL_INGEST_URL")
+    username = require(values, "CUSTOMER_FORWARDER_USERNAME")
+    password = require(values, "CUSTOMER_FORWARDER_PASSWORD")
+    ca_cert = require(values, "CENTRAL_CA_CERT")
     validate_url(url)
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", username):
+        fail("CUSTOMER_FORWARDER_USERNAME contains unsupported characters")
     if username.startswith("<") or username == "customer-primary":
         fail("CUSTOMER_FORWARDER_USERNAME must be replaced with a real central credential id")
     if password.startswith("<") or password in {"change-me", "changeme"}:
         fail("CUSTOMER_FORWARDER_PASSWORD must be replaced")
-    ca_path = host_ca_path(root, ca_cert)
-    if not ca_path.is_file():
-        fail(f"CENTRAL_CA_CERT host file is missing: {ca_path}")
+    validate_ca(args.root, ca_cert)
+    validate_heap(values)
     print("customer forwarder environment valid")
 
 
@@ -1440,7 +1720,6 @@ Add negative tests to a new `customer-forwarder/test/test_forwarder_env.py`:
 ```python
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1448,15 +1727,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "validate-env.py"
+PEM = """-----BEGIN CERTIFICATE-----
+QUJD
+-----END CERTIFICATE-----
+"""
 
 
-def run_env(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    merged = os.environ.copy()
-    merged.update(env)
+def run_validator(root: Path, env_file: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(SCRIPT)],
+        [sys.executable, str(SCRIPT), "--root", str(root), "--env-file", str(env_file)],
         cwd=ROOT,
-        env=merged,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -1464,38 +1744,65 @@ def run_env(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def valid_env(tmp_path: Path) -> dict[str, str]:
-    ca = ROOT / "certs" / "central-ca.crt"
+def write_valid_env(tmp_path: Path, **overrides: str) -> Path:
+    ca = tmp_path / "certs" / "central-ca.crt"
     ca.parent.mkdir(parents=True, exist_ok=True)
-    ca.write_text("test ca\n", encoding="utf-8")
-    return {
+    ca.write_text(PEM, encoding="utf-8")
+    values = {
         "CENTRAL_INGEST_URL": "https://siem.example.com:5044/",
         "CUSTOMER_FORWARDER_USERNAME": "acme-primary",
         "CUSTOMER_FORWARDER_PASSWORD": "not-a-placeholder",
         "CENTRAL_CA_CERT": "/usr/share/logstash/config/certs/central-ca.crt",
+        "LS_JAVA_OPTS": '"-Xms512m -Xmx512m"',
+        "FORWARDER_MEM_LIMIT": "1g",
     }
+    values.update(overrides)
+    env_file = tmp_path / ".env"
+    env_file.write_text("\n".join(f"{key}={value}" for key, value in values.items()) + "\n", encoding="utf-8")
+    return env_file
 
 
 def test_env_validation_accepts_safe_values(tmp_path: Path) -> None:
-    result = run_env(valid_env(tmp_path))
+    result = run_validator(tmp_path, write_valid_env(tmp_path))
     assert result.returncode == 0, result.stdout
     assert "customer forwarder environment valid" in result.stdout
 
 
 def test_env_validation_rejects_http(tmp_path: Path) -> None:
-    env = valid_env(tmp_path)
-    env["CENTRAL_INGEST_URL"] = "http://siem.example.com:5044/"
-    result = run_env(env)
+    result = run_validator(tmp_path, write_valid_env(tmp_path, CENTRAL_INGEST_URL="http://siem.example.com:5044/"))
     assert result.returncode != 0
     assert "must use https" in result.stdout
 
 
 def test_env_validation_rejects_placeholder_password(tmp_path: Path) -> None:
-    env = valid_env(tmp_path)
-    env["CUSTOMER_FORWARDER_PASSWORD"] = "change-me"
-    result = run_env(env)
+    result = run_validator(tmp_path, write_valid_env(tmp_path, CUSTOMER_FORWARDER_PASSWORD="change-me"))
     assert result.returncode != 0
     assert "must be replaced" in result.stdout
+
+
+def test_env_validation_rejects_command_substitution_without_executing(tmp_path: Path) -> None:
+    marker = tmp_path / "executed"
+    env_file = write_valid_env(tmp_path, CUSTOMER_FORWARDER_PASSWORD=f"$(touch {marker})")
+    result = run_validator(tmp_path, env_file)
+    assert result.returncode != 0
+    assert "command substitution is not allowed" in result.stdout
+    assert not marker.exists()
+
+
+def test_env_validation_rejects_ca_path_outside_mounted_cert_dir(tmp_path: Path) -> None:
+    outside_ca = tmp_path / "outside-ca.crt"
+    outside_ca.write_text(PEM, encoding="utf-8")
+    result = run_validator(tmp_path, write_valid_env(tmp_path, CENTRAL_CA_CERT=str(outside_ca)))
+    assert result.returncode != 0
+    assert "must be under /usr/share/logstash/config/certs/" in result.stdout
+
+
+def test_env_validation_rejects_non_pem_ca(tmp_path: Path) -> None:
+    env_file = write_valid_env(tmp_path)
+    (tmp_path / "certs" / "central-ca.crt").write_text("test ca\n", encoding="utf-8")
+    result = run_validator(tmp_path, env_file)
+    assert result.returncode != 0
+    assert "must be a non-empty PEM certificate" in result.stdout
 ```
 
 - [ ] **Step 6: Add Logstash config validation wrapper**
@@ -1512,60 +1819,71 @@ cd "$repo_root"
 PYTHONPATH="$repo_root/scripts" "${PYTHON:-python3}" scripts/validate-config.py
 PYTHONPATH="$repo_root/scripts" "${PYTHON:-python3}" scripts/render-config.py
 
-env_created=false
-if [[ ! -f .env ]]; then
-  cat > .env <<'ENV'
+tmp_dir="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
+
+mkdir -p "$tmp_dir/certs"
+cat > "$tmp_dir/certs/central-ca.crt" <<'PEM'
+-----BEGIN CERTIFICATE-----
+QUJD
+-----END CERTIFICATE-----
+PEM
+
+cat > "$tmp_dir/test.env" <<'ENV'
 CENTRAL_INGEST_URL=https://siem.example.com:5044/
 CUSTOMER_FORWARDER_USERNAME=test-forwarder
 CUSTOMER_FORWARDER_PASSWORD=test-password
 CENTRAL_CA_CERT=/usr/share/logstash/config/certs/central-ca.crt
-LS_JAVA_OPTS=-Xms512m -Xmx512m
+LS_JAVA_OPTS="-Xms512m -Xmx512m"
+FORWARDER_MEM_LIMIT=1g
 ENV
-  env_created=true
-fi
-cleanup_env() {
-  if [[ "$env_created" == "true" ]]; then
-    rm -f .env
-  fi
-}
-trap cleanup_env EXIT
 
-mkdir -p certs
-if [[ ! -f certs/central-ca.crt ]]; then
-  touch certs/central-ca.crt
+env_file="${CUSTOMER_FORWARDER_ENV_FILE:-}"
+env_root="$repo_root"
+if [[ -z "$env_file" ]]; then
+  if [[ -f .env ]]; then
+    env_file="$repo_root/.env"
+  else
+    env_file="$tmp_dir/test.env"
+    env_root="$tmp_dir"
+  fi
 fi
-set -a
-. ./.env
-set +a
-PYTHONPATH="$repo_root/scripts" "${PYTHON:-python3}" scripts/validate-env.py
+
+PYTHONPATH="$repo_root/scripts" "${PYTHON:-python3}" scripts/validate-env.py \
+  --root "$env_root" \
+  --env-file "$env_file"
 
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
   echo "docker unavailable; skipped customer forwarder live logstash config validation"
   exit 0
 fi
 
-tmp_dir="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmp_dir"
-  cleanup_env
-}
-trap cleanup EXIT
-mkdir -p "$tmp_dir/config" "$tmp_dir/data" "$tmp_dir/certs"
+mkdir -p "$tmp_dir/config" "$tmp_dir/data"
 cp config/pipelines.yml "$tmp_dir/config/pipelines.yml"
 sed 's#^path.queue:.*#path.queue: /tmp/customer-forwarder-test-data/queue#' \
   config/logstash.yml > "$tmp_dir/config/logstash.yml"
 printf 'path.data: /tmp/customer-forwarder-test-data\n' >> "$tmp_dir/config/logstash.yml"
-touch "$tmp_dir/certs/central-ca.crt"
 
-docker compose run --rm --no-deps \
+cat > "$tmp_dir/docker-compose.override.yml" <<YAML
+services:
+  customer-forwarder:
+    env_file:
+      - $tmp_dir/test.env
+    volumes:
+      - $tmp_dir/config:/usr/share/logstash/config:ro
+      - $repo_root/pipeline:/usr/share/logstash/pipeline:ro
+      - $tmp_dir/data:/tmp/customer-forwarder-test-data
+      - $tmp_dir/certs:/usr/share/logstash/config/certs:ro
+YAML
+
+docker compose -f docker-compose.yml -f "$tmp_dir/docker-compose.override.yml" run --rm --no-deps \
   -e CENTRAL_INGEST_URL=https://siem.example.com:5044/ \
   -e CUSTOMER_FORWARDER_USERNAME=test-forwarder \
   -e CUSTOMER_FORWARDER_PASSWORD=test-password \
   -e CENTRAL_CA_CERT=/usr/share/logstash/config/certs/central-ca.crt \
-  -v "$tmp_dir/config:/usr/share/logstash/config:ro" \
-  -v "$repo_root/pipeline:/usr/share/logstash/pipeline:ro" \
-  -v "$tmp_dir/data:/tmp/customer-forwarder-test-data" \
-  -v "$tmp_dir/certs:/usr/share/logstash/config/certs:ro" \
   customer-forwarder \
   logstash --path.settings /usr/share/logstash/config --config.test_and_exit
 
@@ -1625,6 +1943,7 @@ git commit -m "feat(forwarder): add logstash runtime package"
 - Create: `customer-forwarder/test/fixtures/generic-syslog.log`
 - Create: `customer-forwarder/test/test_catalog_copy.py`
 - Create: `customer-forwarder/test/test_compose_config.py`
+- Create: `customer-forwarder/scripts/parser-smoke.py`
 - Create: `customer-forwarder/scripts/load-smoke.py`
 - Create: `scripts/test-customer-forwarder.sh`
 - Modify: `.gitignore`
@@ -1691,6 +2010,15 @@ def test_customer_forwarder_catalog_matches_main_catalog() -> None:
     ).read_text(encoding="utf-8") == (
         repo / "customer-forwarder" / "config" / "source-catalog.yml"
     ).read_text(encoding="utf-8")
+
+
+def test_customer_forwarder_catalog_schema_matches_main_catalog_schema() -> None:
+    repo = Path(__file__).resolve().parents[2]
+    assert (
+        repo / "source-catalog" / "sources.schema.json"
+    ).read_text(encoding="utf-8") == (
+        repo / "customer-forwarder" / "config" / "source-catalog.schema.json"
+    ).read_text(encoding="utf-8")
 ```
 
 - [ ] **Step 3: Add Compose and pipeline config tests**
@@ -1740,9 +2068,177 @@ def test_pipelines_have_explicit_worker_and_batch_settings() -> None:
 def test_parse_pipeline_has_receiver() -> None:
     receiver = (ROOT / "pipeline" / "10-parse-input.conf").read_text(encoding="utf-8")
     assert 'address => "parse-and-normalize"' in receiver
+    assert 'remove_field => [' in receiver
+    assert '"[siem][source_id]" => "%{[@metadata][forwarder][source_id]}"' in receiver
+
+
+def test_compose_has_runtime_guardrails() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    service = compose["services"]["customer-forwarder"]
+    assert service["mem_limit"] == "${FORWARDER_MEM_LIMIT:-1g}"
+    assert service["logging"]["options"]["max-size"] == "10m"
+    assert service["logging"]["options"]["max-file"] == "5"
+    assert service["environment"]["LS_JAVA_OPTS"] == "${LS_JAVA_OPTS:--Xms512m -Xmx512m}"
 ```
 
-- [ ] **Step 4: Add optional load smoke helper**
+- [ ] **Step 4: Add Docker-backed parser fixture smoke**
+
+Create `customer-forwarder/scripts/parser-smoke.py`:
+
+```python
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
+import urllib.request
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def docker_available() -> bool:
+    return shutil.which("docker") is not None and subprocess.run(
+        ["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
+    ).returncode == 0
+
+
+def post_json(url: str, path: Path) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        if response.status >= 300:
+            raise RuntimeError(f"unexpected HTTP status {response.status}")
+
+
+def send_syslog(host: str, port: int, message: str) -> None:
+    with socket.create_connection((host, port), timeout=10) as sock:
+        sock.sendall(message.encode("utf-8") + b"\n")
+
+
+def main() -> None:
+    if not docker_available():
+        print("docker unavailable; skipped customer forwarder parser smoke")
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        config = tmp_path / "config"
+        pipeline = tmp_path / "pipeline"
+        output = tmp_path / "out"
+        data = tmp_path / "data"
+        shutil.copytree(ROOT / "config", config)
+        shutil.copytree(ROOT / "pipeline", pipeline)
+        output.mkdir()
+        data.mkdir()
+        (pipeline / "90-output-ingest-edge.conf").write_text(
+            """
+input { pipeline { address => "output-ingest-edge" } }
+output {
+  file {
+    path => "/tmp/customer-forwarder-parser/events.jsonl"
+    codec => json_lines
+  }
+}
+""".lstrip(),
+            encoding="utf-8",
+        )
+        logstash_yml = config / "logstash.yml"
+        logstash_yml.write_text(
+            logstash_yml.read_text(encoding="utf-8")
+            + "\npath.data: /tmp/customer-forwarder-data\n",
+            encoding="utf-8",
+        )
+
+        container = subprocess.check_output(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--rm",
+                "-p",
+                "127.0.0.1:5514:5514/tcp",
+                "-p",
+                "127.0.0.1:8081:8081/tcp",
+                "-p",
+                "127.0.0.1:8082:8082/tcp",
+                "-v",
+                f"{config}:/usr/share/logstash/config:ro",
+                "-v",
+                f"{pipeline}:/usr/share/logstash/pipeline:ro",
+                "-v",
+                f"{output}:/tmp/customer-forwarder-parser",
+                "-v",
+                f"{data}:/tmp/customer-forwarder-data",
+                "opensearchproject/logstash-oss-with-opensearch-output-plugin:8.9.0",
+                "logstash",
+                "--path.settings",
+                "/usr/share/logstash/config",
+            ],
+            text=True,
+        ).strip()
+        try:
+            deadline = time.time() + 90
+            while time.time() < deadline:
+                try:
+                    post_json("http://127.0.0.1:8081/", ROOT / "test/fixtures/windows-ad.json")
+                    break
+                except Exception:
+                    time.sleep(2)
+            else:
+                raise RuntimeError("logstash parser smoke did not become ready")
+
+            forged = json.loads((ROOT / "test/fixtures/windows-ad.json").read_text(encoding="utf-8"))
+            forged["siem"] = {"source_id": "windows-sysmon"}
+            forged_path = tmp_path / "forged-windows-ad.json"
+            forged_path.write_text(json.dumps(forged), encoding="utf-8")
+            post_json("http://127.0.0.1:8081/", forged_path)
+            post_json("http://127.0.0.1:8082/", ROOT / "test/fixtures/windows-sysmon.json")
+            send_syslog("127.0.0.1", 5514, (ROOT / "test/fixtures/generic-syslog.log").read_text(encoding="utf-8"))
+
+            events_file = output / "events.jsonl"
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                if events_file.exists() and len(events_file.read_text(encoding="utf-8").splitlines()) >= 4:
+                    break
+                time.sleep(1)
+            events = [json.loads(line) for line in events_file.read_text(encoding="utf-8").splitlines()]
+            source_ids = [event["siem"]["source_id"] for event in events]
+            assert source_ids.count("windows-ad") >= 2
+            assert "windows-sysmon" in source_ids
+            assert "generic-syslog" in source_ids
+            for event in events:
+                assert event["observer"]["name"] == "customer-forwarder-01"
+                assert event["event"]["dataset"] == event["siem"]["source_id"]
+                assert event["event"]["original"]
+                assert event["event"]["ingested"]
+        finally:
+            subprocess.run(["docker", "rm", "-f", container], check=False)
+
+    print("customer forwarder parser smoke passed")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Run:
+
+```bash
+chmod +x customer-forwarder/scripts/parser-smoke.py
+```
+
+- [ ] **Step 5: Add optional load smoke helper**
 
 Create `customer-forwarder/scripts/load-smoke.py`:
 
@@ -1751,34 +2247,60 @@ Create `customer-forwarder/scripts/load-smoke.py`:
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import time
 import urllib.request
 from pathlib import Path
 
 
+def fetch_json(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def pipeline_event_count(stats: dict, pipeline_id: str, field: str) -> int:
+    return int(stats.get("pipelines", {}).get(pipeline_id, {}).get("events", {}).get(field, 0))
+
+
+def queued_event_count(stats: dict) -> int:
+    total = 0
+    for pipeline in stats.get("pipelines", {}).values():
+        queue = pipeline.get("queue", {})
+        total += int(queue.get("events_count", 0) or 0)
+    return total
+
+
+def post_once(url: str, body: bytes) -> None:
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        if response.status >= 300:
+            raise SystemExit(f"unexpected HTTP status {response.status}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:8082/")
+    parser.add_argument("--monitor-url", default="http://127.0.0.1:9600/_node/stats/pipelines")
     parser.add_argument("--count", type=int, default=100)
+    parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--fixture", default="test/fixtures/windows-sysmon.json")
     parser.add_argument("--min-events-per-second", type=float, default=25.0)
+    parser.add_argument("--skip-monitor", action="store_true")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
     payload = json.loads((root / args.fixture).read_text(encoding="utf-8"))
     body = json.dumps(payload).encode("utf-8")
+    before = None if args.skip_monitor else fetch_json(args.monitor_url)
     started = time.perf_counter()
-    for _ in range(args.count):
-        request = urllib.request.Request(
-            args.url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=5) as response:
-            if response.status >= 300:
-                raise SystemExit(f"unexpected HTTP status {response.status}")
+    with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+        list(executor.map(lambda _index: post_once(args.url, body), range(args.count)))
     elapsed = time.perf_counter() - started
     rate = args.count / elapsed
     print(f"sent {args.count} events in {elapsed:.2f}s ({rate:.1f} events/s)")
@@ -1786,6 +2308,17 @@ def main() -> None:
         raise SystemExit(
             f"event rate {rate:.1f}/s below target {args.min_events_per_second:.1f}/s"
         )
+    if before is not None:
+        time.sleep(2)
+        after = fetch_json(args.monitor_url)
+        output_before = pipeline_event_count(before, "output-ingest-edge", "out")
+        output_after = pipeline_event_count(after, "output-ingest-edge", "out")
+        if output_after <= output_before:
+            raise SystemExit("output-ingest-edge events.out did not advance during smoke")
+        queued_before = queued_event_count(before)
+        queued_after = queued_event_count(after)
+        if queued_after > queued_before + args.count:
+            raise SystemExit("Logstash queued event count grew unexpectedly during smoke")
 
 
 if __name__ == "__main__":
@@ -1800,10 +2333,11 @@ chmod +x customer-forwarder/scripts/load-smoke.py
 
 This helper is not part of default CI because it requires a running local
 forwarder. It documents the v1 performance decision: object-per-request HTTP
-delivery is accepted for the first version, with conservative output pooling and
-a simple operator smoke test.
+delivery is accepted for the first version, with conservative output pooling,
+optional concurrency, and Logstash `_node/stats/pipelines` monitoring so a
+smoke run can detect output backpressure instead of only client-side send rate.
 
-- [ ] **Step 5: Add top-level customer forwarder test wrapper**
+- [ ] **Step 6: Add top-level customer forwarder test wrapper**
 
 Create `scripts/test-customer-forwarder.sh`:
 
@@ -1822,6 +2356,7 @@ PYTHONPATH=customer-forwarder/scripts "${PYTHON:-python3}" -m pytest \
   -q
 
 PYTHON="${PYTHON:-python3}" bash customer-forwarder/scripts/test-logstash-config.sh
+PYTHONPATH=customer-forwarder/scripts "${PYTHON:-python3}" customer-forwarder/scripts/parser-smoke.py
 
 echo "customer forwarder tests passed"
 ```
@@ -1832,7 +2367,7 @@ Run:
 chmod +x scripts/test-customer-forwarder.sh
 ```
 
-- [ ] **Step 6: Update ignore rules**
+- [ ] **Step 7: Update ignore rules**
 
 Append to `.gitignore`:
 
@@ -1847,7 +2382,7 @@ customer-forwarder/tmp/
 
 Do not remove any existing ignore rules.
 
-- [ ] **Step 7: Update secret ignore test**
+- [ ] **Step 8: Update secret ignore test**
 
 In `scripts/test-secret-ignore.sh`, add these entries to the ignored path list:
 
@@ -1858,7 +2393,7 @@ In `scripts/test-secret-ignore.sh`, add these entries to the ignored path list:
   "customer-forwarder/data/logstash/queue/page.0"
 ```
 
-- [ ] **Step 8: Add customer forwarder README**
+- [ ] **Step 9: Add customer forwarder README**
 
 Create `customer-forwarder/README.md`:
 
@@ -1889,8 +2424,8 @@ If validation reports an unknown source ID, compare `config/forwarder.yml` with
 | `siem.source_id` | Protocol | Default port | Sender expectation | Smoke test |
 |---|---:|---:|---|---|
 | `generic-syslog` | syslog TCP/UDP | `5514` | RFC3164/RFC5424 syslog from devices, Linux, or appliances | `logger -n <forwarder-host> -P 5514 "siem test"` |
-| `windows-ad` | HTTP JSON | `8081` | Winlogbeat-compatible Windows Security/AD JSON | `curl -H 'Content-Type: application/json' --data @test/fixtures/windows-ad.json http://<forwarder-host>:8081/` |
-| `windows-sysmon` | HTTP JSON | `8082` | Winlogbeat-compatible Sysmon JSON | `curl -H 'Content-Type: application/json' --data @test/fixtures/windows-sysmon.json http://<forwarder-host>:8082/` |
+| `windows-ad` | HTTP JSON | `8081` | HTTP POST JSON shaped like Winlogbeat Windows Security/AD events; this is not the native Beats protocol | `curl -H 'Content-Type: application/json' --data @test/fixtures/windows-ad.json http://<forwarder-host>:8081/` |
+| `windows-sysmon` | HTTP JSON | `8082` | HTTP POST JSON shaped like Winlogbeat Sysmon events; this is not the native Beats protocol | `curl -H 'Content-Type: application/json' --data @test/fixtures/windows-sysmon.json http://<forwarder-host>:8082/` |
 
 ## Configure
 
@@ -1901,6 +2436,8 @@ CENTRAL_INGEST_URL=https://siem.example.com:5044/
 CUSTOMER_FORWARDER_USERNAME=<central credential id>
 CUSTOMER_FORWARDER_PASSWORD=<central credential password>
 CENTRAL_CA_CERT=/usr/share/logstash/config/certs/central-ca.crt
+LS_JAVA_OPTS="-Xms512m -Xmx512m"
+FORWARDER_MEM_LIMIT=1g
 ```
 
 Place the central CA certificate at:
@@ -1919,6 +2456,7 @@ python3 -m venv .venv
 pip install -r requirements.txt
 PYTHONPATH=scripts python scripts/validate-config.py
 PYTHONPATH=scripts python scripts/render-config.py
+PYTHONPATH=scripts python scripts/validate-env.py --env-file .env
 ```
 
 ## Run
@@ -1929,7 +2467,8 @@ docker compose logs -f customer-forwarder
 ```
 
 Runtime state is stored under `data/` and must be on durable disk. The default
-persistent queue size is `8gb`.
+persistent queue size is `8gb`; validation requires enough free disk for
+`queue.max_bytes + dlq_max_bytes` plus 20% headroom.
 
 ## Security
 
@@ -1949,9 +2488,14 @@ forwarder:
 ```bash
 PYTHONPATH=scripts python scripts/load-smoke.py --url http://127.0.0.1:8082/ --count 100
 ```
+
+The smoke helper reads `http://127.0.0.1:9600/_node/stats/pipelines` by default
+and fails if the output pipeline does not advance or if queue depth grows
+unexpectedly. Use `--skip-monitor` only when the Logstash monitoring API is not
+available.
 ````
 
-- [ ] **Step 9: Update top-level README validation and layout**
+- [ ] **Step 10: Update top-level README validation and layout**
 
 In top-level `README.md`, add `customer-forwarder/` to the repository layout:
 
@@ -1976,7 +2520,7 @@ Windows AD, Windows Sysmon, and generic syslog inputs, buffers with Logstash
 persistent queues, and forwards normalized JSON to `ingest-edge`.
 ```
 
-- [ ] **Step 10: Run customer forwarder tests**
+- [ ] **Step 11: Run customer forwarder tests**
 
 Run:
 
@@ -1992,7 +2536,7 @@ customer forwarder tests passed
 secret ignore checks passed
 ```
 
-- [ ] **Step 11: Commit tests, docs, and ignore rules**
+- [ ] **Step 12: Commit tests, docs, and ignore rules**
 
 Run:
 

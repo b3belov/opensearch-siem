@@ -2,7 +2,7 @@
 
 **Plan:** [2026-06-10-customer-forwarder-logstash.md](./2026-06-10-customer-forwarder-logstash.md)
 **Status:** in-progress
-**Verified at commit:** 79492e34ebf4fd5af30fa626beca24116d3e7b3c
+**Verified at commit:** pending-iteration-2
 
 ---
 
@@ -112,3 +112,110 @@
 ### Iteration summary
 - Findings raised: 12 | applied: 12 | rejected: 0 | deferred: 0
 - Plan commit: 79492e34ebf4fd5af30fa626beca24116d3e7b3c
+
+## Iteration 2 — 2026-06-10 17:32
+
+**Dispatched concerns:** ISSUES, UX, reusability, security, performance
+**Codebase commit at analysis:** 1fbb42c59cb686cde65aae0b9f32e5897b93ca7f
+
+### Findings
+
+#### F-2.1 — [severity: high] — [ISSUES/security/UX] — Env and CA validation can execute or mutate customer-local material
+- **Location in plan:** Task 4, Steps 1, 5-6; Task 5, README
+- **Description:** Shell-sourcing `.env` breaks quoted heap values and can execute command substitution before validation. The validation wrapper also planned to create or touch `customer-forwarder/.env` and `customer-forwarder/certs/central-ca.crt`, which could hide fake local trust material under ignored paths.
+- **Suggested change:** Parse env files as data, quote `LS_JAVA_OPTS` in `.env.example`, never shell-source `.env`, validate heap/memory sizing, restrict `CENTRAL_CA_CERT` to the mounted cert directory, require parseable PEM, and use temporary env/cert material for tests.
+- **Rationale (incl. codebase grounding):** The plan already ignored customer cert and env paths, so accidental mutation would be invisible in normal status output. Compose also needs shell-safe `.env` values.
+- **Decision:** applied
+- **Plan diff:** Rewrote env validation around `--env-file`, safe `KEY=value` parsing, CA PEM checks, heap/memory validation, quoted `.env.example`, temp test env/certs, and wrapper logic that does not mutate customer-local secret paths.
+
+#### F-2.2 — [severity: high] — [security] — Local source identity can be spoofed by payload fields
+- **Location in plan:** Task 3, Step 9; Task 4, Step 4; Task 5 parser smoke
+- **Description:** Inputs added routing fields directly to the event body, while parser branches and central routing trust `siem.source_id`. A sender could submit forged `siem.source_id`, `customer`, or routing fields to the wrong local port.
+- **Suggested change:** Store configured source metadata in `@metadata`, remove untrusted routing fields at the parse boundary, and then replace `siem.source_id`, `event.dataset`, `observer.type`, and `observer.name` from metadata.
+- **Rationale (incl. codebase grounding):** Central `ingest-edge` preserves client-provided `siem.source_id`, and central Logstash routes on it, so the customer forwarder must canonicalize before forwarding.
+- **Decision:** applied
+- **Plan diff:** Updated `00-inputs.conf.j2`, added canonicalization to `10-parse-input.conf`, and added parser smoke coverage with a forged Windows AD payload proving the configured port wins.
+
+#### F-2.3 — [severity: med] — [ISSUES] — Parser fixtures are created but not exercised
+- **Location in plan:** Task 5, Steps 1, 4, 6
+- **Description:** Static fixtures existed, but required tests only checked config syntax and did not prove parser output fields.
+- **Suggested change:** Add a Docker-backed parser smoke that runs Logstash with a file output, sends all v1 fixtures, and asserts normalized source IDs, datasets, observer name, `event.original`, and `event.ingested`.
+- **Rationale (incl. codebase grounding):** Logstash config syntax checks do not catch field-branching mistakes in parser filters.
+- **Decision:** applied
+- **Plan diff:** Added `customer-forwarder/scripts/parser-smoke.py` and included it in `scripts/test-customer-forwarder.sh` with Docker-unavailable skip behavior.
+
+#### F-2.4 — [severity: med] — [reusability] — Legacy relay bundle treats non-syslog catalog inputs as syslog
+- **Location in plan:** Task 2, Step 4
+- **Description:** Updating relay tests to expect Windows source ports would make the legacy relay advertise Windows AD/Sysmon as syslog, conflicting with the catalog input type and the new HTTP JSON forwarder.
+- **Suggested change:** Keep `relay/` as a syslog-only compatibility path and filter relay sources by catalog `input: syslog`.
+- **Rationale (incl. codebase grounding):** `relay/templates/pipeline.conf.j2` renders only syslog inputs, while `windows-ad` and `windows-sysmon` are cataloged as `winlogbeat-json`.
+- **Decision:** applied
+- **Plan diff:** Updated relay generator steps and tests to include only `generic-syslog` and assert Windows sources are absent from relay output.
+
+#### F-2.5 — [severity: med] — [performance] — Persistent queue sizing lacks disk headroom validation
+- **Location in plan:** Task 3, Steps 5, 7-8; Task 5 README
+- **Description:** Queue and DLQ values were regex-validated but not checked for semantic bounds or available disk headroom.
+- **Suggested change:** Parse size values, enforce sane minimum/maximum limits, reject DLQ larger than queue, and add a disk free-space preflight with 20% headroom.
+- **Rationale (incl. codebase grounding):** Persistent queue is the outage buffer; bad sizing fails at runtime or exhausts customer disk.
+- **Decision:** applied
+- **Plan diff:** Added queue size parsing, semantic validation, disk-headroom helper, tests, and README disk guidance.
+
+#### F-2.6 — [severity: med] — [UX] — README run path bypasses env validation
+- **Location in plan:** Task 5, Step 9
+- **Description:** Customer instructions validated and rendered config but did not run the env validator operators depend on before `docker compose up`.
+- **Suggested change:** Include `scripts/validate-env.py --env-file .env` in the documented validation path.
+- **Rationale (incl. codebase grounding):** The runtime wrapper validates env before Docker config validation; operator docs should match the supported path.
+- **Decision:** applied
+- **Plan diff:** Added env validation to `customer-forwarder/README.md` before the run command.
+
+#### F-2.7 — [severity: med] — [UX] — Windows input wording implies native Beats protocol
+- **Location in plan:** Task 5, Step 9
+- **Description:** The README called Windows inputs "Winlogbeat-compatible", which could be read as native Beats input support even though the forwarder exposes HTTP JSON inputs.
+- **Suggested change:** State that Windows inputs require HTTP POST JSON shaped like Winlogbeat events, not native Beats protocol.
+- **Rationale (incl. codebase grounding):** The planned inputs use Logstash `http` with JSON codec on ports `8081` and `8082`, not a Beats input.
+- **Decision:** applied
+- **Plan diff:** Updated the README input table sender expectations for `windows-ad` and `windows-sysmon`.
+
+#### F-2.8 — [severity: med] — [reusability] — Catalog drift guards miss schema and duplicate dataset checks
+- **Location in plan:** Task 3, Steps 2, 5, 7; Task 5, Step 2
+- **Description:** The copied catalog test compared only `sources.yml`, and local catalog loading only checked duplicate IDs.
+- **Suggested change:** Compare copied `sources.schema.json` too and enforce duplicate dataset rejection in the local catalog loader.
+- **Rationale (incl. codebase grounding):** Central catalog loading rejects duplicate datasets, so customer-forwarder validation should preserve the same invariant.
+- **Decision:** applied
+- **Plan diff:** Added schema-copy test and duplicate-dataset validation/test in `forwarder_config.py`.
+
+#### F-2.9 — [severity: med] — [performance] — Load smoke can pass while output backs up
+- **Location in plan:** Task 5, Step 5
+- **Description:** The load smoke helper measured client-side POST status/rate only, so it could pass while the output pipeline was stalled or queues were growing.
+- **Suggested change:** Add optional concurrency and Logstash `_node/stats/pipelines` monitoring, then fail if output events do not advance or queued events grow unexpectedly.
+- **Rationale (incl. codebase grounding):** Logstash accepts local input independently from downstream HTTPS forwarding, so input success is not delivery success.
+- **Decision:** applied
+- **Plan diff:** Extended `load-smoke.py` with `--monitor-url`, `--concurrency`, output event checks, queue growth checks, and README guidance.
+
+#### F-2.10 — [severity: med] — [UX/performance] — Runtime guardrails are missing from Compose
+- **Location in plan:** Task 4, Steps 1-2, 5; Task 5, Step 3
+- **Description:** The planned Compose service had no container memory ceiling, log rotation, or heap-vs-memory validation.
+- **Suggested change:** Add `FORWARDER_MEM_LIMIT`, `mem_limit`, JSON-file log rotation, and validation that `LS_JAVA_OPTS` is well formed and below the memory ceiling.
+- **Rationale (incl. codebase grounding):** The customer forwarder is intended for small customer hosts and should not silently consume unbounded logs or memory.
+- **Decision:** applied
+- **Plan diff:** Added Compose logging/memory guardrails, `.env.example` memory setting, env heap validation, and Compose guardrail tests.
+
+#### F-2.11 — [severity: low] — [UX] — `forwarder_name` is not emitted in events
+- **Location in plan:** Task 3, Step 9; Task 4, Step 4; Task 5 tests
+- **Description:** `forwarder_name` was configurable but not visible in forwarded events.
+- **Suggested change:** Emit it as `observer.name` from trusted metadata.
+- **Rationale (incl. codebase grounding):** Central operators need to distinguish customer-side forwarder instances without trusting event-body fields.
+- **Decision:** applied
+- **Plan diff:** Added `forwarder_name` to rendered source metadata, canonicalized it to `[observer][name]`, and asserted it in tests and parser smoke.
+
+#### F-2.12 — [severity: low] — [security/reusability] — Dependency and parser enum drift can age the package
+- **Location in plan:** Task 1, Step 4; Task 3, Step 1
+- **Description:** The central GitOps source schema duplicated the parser enum already controlled by the catalog, and the forwarder pinned an older Jinja2 patch level.
+- **Suggested change:** Make the GitOps source parser field a safe string pattern and rely on catalog matching for exact values; pin Jinja2 to a patched 3.1.x baseline.
+- **Rationale (incl. codebase grounding):** Parser membership should be maintained in one catalog, and customer-distributed dependencies should not start from stale patch pins.
+- **Decision:** applied
+- **Plan diff:** Replaced the GitOps parser enum with a safe pattern and updated `customer-forwarder/requirements.txt` to `Jinja2==3.1.6` with a note to keep a patched 3.1.x baseline.
+
+### Iteration summary
+- Findings raised: 12 | applied: 12 | rejected: 0 | deferred: 0
+- Plan commit: pending-iteration-2
