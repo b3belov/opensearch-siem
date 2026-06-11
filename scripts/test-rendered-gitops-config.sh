@@ -17,7 +17,11 @@ fi
 test -f gitops/rendered/logstash/customer-auth.yml
 test -f gitops/rendered/logstash/source-routing.yml
 test -f gitops/rendered/ingest-edge/customer-auth.yml
-test -f gitops/rendered/opensearch/index-templates/logs-acme-firewall-template.json
+test -f gitops/rendered/opensearch/index-templates/logs-acme-generic-syslog-template.json
+test -f gitops/rendered/opensearch/index-templates/logs-acme-windows-ad-template.json
+test -f gitops/rendered/opensearch/index-templates/logs-acme-windows-sysmon-template.json
+test ! -e gitops/rendered/opensearch/index-templates/logs-acme-firewall-template.json
+test ! -e gitops/rendered/opensearch/index-templates/logs-acme-windows-template.json
 test -f gitops/rendered/opensearch/security/logstash-writer-role.json
 
 "${PYTHON:-python3}" - <<'PY'

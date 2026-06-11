@@ -1,21 +1,31 @@
 sources:
-  acme:firewall:
+  acme:generic-syslog:
     customer_slug: acme
-    source_id: firewall
-    dataset: firewall
-    stream: logs-acme-firewall
-    quarantine_stream: logs-acme-firewall-quarantine
+    source_id: generic-syslog
+    dataset: generic-syslog
+    stream: logs-acme-generic-syslog
+    quarantine_stream: logs-acme-generic-syslog-quarantine
     parser: generic-syslog
     retention_policy: critical-30d
     priority: critical
     enabled: true
-  acme:windows:
+  acme:windows-ad:
     customer_slug: acme
-    source_id: windows
-    dataset: windows
-    stream: logs-acme-windows
-    quarantine_stream: logs-acme-windows-quarantine
-    parser: windows-json
+    source_id: windows-ad
+    dataset: windows-ad
+    stream: logs-acme-windows-ad
+    quarantine_stream: logs-acme-windows-ad-quarantine
+    parser: windows-ad-json
+    retention_policy: standard-7d
+    priority: standard
+    enabled: true
+  acme:windows-sysmon:
+    customer_slug: acme
+    source_id: windows-sysmon
+    dataset: windows-sysmon
+    stream: logs-acme-windows-sysmon
+    quarantine_stream: logs-acme-windows-sysmon-quarantine
+    parser: windows-sysmon-json
     retention_policy: standard-7d
     priority: standard
     enabled: true

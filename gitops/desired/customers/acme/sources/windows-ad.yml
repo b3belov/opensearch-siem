@@ -1,0 +1,11 @@
+apiVersion: siem.local/v1
+kind: Source
+customer: acme
+id: windows-ad
+name: Acme Windows Active Directory events
+dataset: windows-ad
+parser: windows-ad-json
+retentionPolicy: standard-7d
+priority: standard
+dailyVolumeBudgetGb: 2
+enabled: true

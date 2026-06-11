@@ -1,7 +1,7 @@
 {
   "data_stream": {},
   "index_patterns": [
-    "logs-acme-windows"
+    "logs-acme-windows-sysmon-quarantine"
   ],
   "priority": 300,
   "template": {
@@ -43,7 +43,7 @@
     "settings": {
       "index.number_of_replicas": 0,
       "index.number_of_shards": 1,
-      "plugins.index_state_management.policy_id": "standard-7d"
+      "plugins.index_state_management.policy_id": "quarantine-7d"
     }
   }
 }

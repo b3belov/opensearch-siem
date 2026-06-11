@@ -14,6 +14,8 @@ from jsonschema import Draft202012Validator
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESIRED = REPO_ROOT / "gitops" / "desired"
 SCHEMAS = REPO_ROOT / "gitops" / "schemas"
+SOURCE_CATALOG = REPO_ROOT / "source-catalog" / "sources.yml"
+SOURCE_CATALOG_SCHEMA = REPO_ROOT / "source-catalog" / "sources.schema.json"
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,15 @@ class Source:
     path: Path
 
 
+@dataclass(frozen=True)
+class SourceCatalogEntry:
+    id: str
+    dataset: str
+    parser: str
+    input: str
+    description: str
+
+
 def read_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         value = yaml.safe_load(handle)
@@ -52,13 +63,17 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def validate_schema(document: dict[str, Any], schema_name: str, path: Path) -> None:
-    schema = read_json(SCHEMAS / schema_name)
+def validate_schema_file(document: dict[str, Any], schema_path: Path, path: Path) -> None:
+    schema = read_json(schema_path)
     validator = Draft202012Validator(schema)
     errors = sorted(validator.iter_errors(document), key=lambda error: list(error.path))
     if errors:
         rendered = "; ".join(f"{'/'.join(map(str, error.path))}: {error.message}" for error in errors)
         raise ValueError(f"{path}: {rendered}")
+
+
+def validate_schema(document: dict[str, Any], schema_name: str, path: Path) -> None:
+    validate_schema_file(document, SCHEMAS / schema_name, path)
 
 
 def customer_dirs() -> list[Path]:
@@ -91,7 +106,35 @@ def load_retention_policy_names() -> set[str]:
     return set(names)
 
 
-def load_sources(customers: dict[str, Customer], retention_names: set[str]) -> list[Source]:
+def load_source_catalog() -> dict[str, SourceCatalogEntry]:
+    doc = read_yaml(SOURCE_CATALOG)
+    validate_schema_file(doc, SOURCE_CATALOG_SCHEMA, SOURCE_CATALOG)
+
+    result: dict[str, SourceCatalogEntry] = {}
+    seen_datasets: set[str] = set()
+    for item in doc["sources"]:
+        sid = item["id"]
+        dataset = item["dataset"]
+        if sid in result:
+            raise ValueError(f"{SOURCE_CATALOG}: duplicate source catalog id {sid}")
+        if dataset in seen_datasets:
+            raise ValueError(f"{SOURCE_CATALOG}: duplicate source catalog dataset {dataset}")
+        seen_datasets.add(dataset)
+        result[sid] = SourceCatalogEntry(
+            id=sid,
+            dataset=dataset,
+            parser=item["parser"],
+            input=item["input"],
+            description=item["description"],
+        )
+    return result
+
+
+def load_sources(
+    customers: dict[str, Customer],
+    retention_names: set[str],
+    source_catalog: dict[str, SourceCatalogEntry],
+) -> list[Source]:
     sources: list[Source] = []
     seen_streams: set[tuple[str, str]] = set()
     for customer_dir in customer_dirs():
@@ -101,6 +144,18 @@ def load_sources(customers: dict[str, Customer], retention_names: set[str]) -> l
             validate_schema(doc, "source.schema.json", path)
             customer = doc["customer"]
             dataset = doc["dataset"]
+            catalog_entry = source_catalog.get(doc["id"])
+            if catalog_entry is None:
+                supported = ", ".join(sorted(source_catalog))
+                raise ValueError(f"{path}: source id {doc['id']} is not in source catalog; supported source IDs: {supported}")
+            if doc["dataset"] != catalog_entry.dataset:
+                raise ValueError(
+                    f"{path}: catalog dataset for {doc['id']} is {catalog_entry.dataset}, got {doc['dataset']}"
+                )
+            if doc["parser"] != catalog_entry.parser:
+                raise ValueError(
+                    f"{path}: catalog parser for {doc['id']} is {catalog_entry.parser}, got {doc['parser']}"
+                )
             stream_key = (customer, dataset)
             if customer not in customers:
                 raise ValueError(f"{path}: unknown customer {customer}")
@@ -151,26 +206,30 @@ def validate_global_files() -> None:
 
 def validate_all() -> None:
     validate_global_files()
+    source_catalog = load_source_catalog()
     customers = load_customers()
     retention_names = load_retention_policy_names()
     validate_customer_sidecars(customers)
-    load_sources(customers, retention_names)
+    load_sources(customers, retention_names, source_catalog)
 
 
 def enabled_sources_for_customer(customer_slug: str) -> list[dict[str, str]]:
-    """Glob + parse a single customer's enabled sources (id/dataset only).
+    """Return enabled syslog-compatible sources for the legacy relay bundle."""
+    source_catalog = load_source_catalog()
+    customers = load_customers()
+    retention_names = load_retention_policy_names()
+    if customer_slug not in customers:
+        raise ValueError(f"unknown customer: {customer_slug}")
+    sources = load_sources(customers, retention_names, source_catalog)
 
-    Used by the relay-bundle generator. Lighter than load_sources() — no
-    cross-customer/retention validation — but the single source of truth for
-    *how* a customer's source files are enumerated.
-    """
-    source_dir = DESIRED / "customers" / customer_slug / "sources"
     result: list[dict[str, str]] = []
-    for path in sorted(source_dir.glob("*.yml")):
-        doc = read_yaml(path)
-        if not doc.get("enabled", False):
+    for source in sources:
+        if source.customer != customer_slug or not source.enabled:
             continue
-        result.append({"id": doc["id"], "dataset": doc["dataset"]})
+        catalog_entry = source_catalog[source.id]
+        if catalog_entry.input != "syslog":
+            continue
+        result.append({"id": source.id, "dataset": source.dataset})
     return result
 
 

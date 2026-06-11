@@ -1,7 +1,7 @@
 {
   "data_stream": {},
   "index_patterns": [
-    "logs-acme-firewall-quarantine"
+    "logs-acme-windows-ad-quarantine"
   ],
   "priority": 300,
   "template": {

@@ -17,8 +17,8 @@
       ]
     },    {
       "index_patterns": [
-        "logs-acme-firewall",
-        "logs-acme-firewall-*"
+        "logs-acme-generic-syslog",
+        "logs-acme-generic-syslog-*"
       ],
       "allowed_actions": [
         "indices:data/write/bulk*",
@@ -29,8 +29,8 @@
       ]
     },    {
       "index_patterns": [
-        "logs-acme-firewall-quarantine",
-        "logs-acme-firewall-quarantine-*"
+        "logs-acme-generic-syslog-quarantine",
+        "logs-acme-generic-syslog-quarantine-*"
       ],
       "allowed_actions": [
         "indices:data/write/bulk*",
@@ -53,8 +53,8 @@
       ]
     },    {
       "index_patterns": [
-        "logs-acme-windows",
-        "logs-acme-windows-*"
+        "logs-acme-windows-ad",
+        "logs-acme-windows-ad-*"
       ],
       "allowed_actions": [
         "indices:data/write/bulk*",
@@ -65,8 +65,32 @@
       ]
     },    {
       "index_patterns": [
-        "logs-acme-windows-quarantine",
-        "logs-acme-windows-quarantine-*"
+        "logs-acme-windows-ad-quarantine",
+        "logs-acme-windows-ad-quarantine-*"
+      ],
+      "allowed_actions": [
+        "indices:data/write/bulk*",
+        "indices:data/write/create",
+        "indices:data/write/index",
+        "indices:admin/create",
+        "indices:admin/mapping/put"
+      ]
+    },    {
+      "index_patterns": [
+        "logs-acme-windows-sysmon",
+        "logs-acme-windows-sysmon-*"
+      ],
+      "allowed_actions": [
+        "indices:data/write/bulk*",
+        "indices:data/write/create",
+        "indices:data/write/index",
+        "indices:admin/create",
+        "indices:admin/mapping/put"
+      ]
+    },    {
+      "index_patterns": [
+        "logs-acme-windows-sysmon-quarantine",
+        "logs-acme-windows-sysmon-quarantine-*"
       ],
       "allowed_actions": [
         "indices:data/write/bulk*",

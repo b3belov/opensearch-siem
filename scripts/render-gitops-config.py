@@ -14,6 +14,7 @@ from scripts.lib.gitops_config import (
     REPO_ROOT,
     load_customers,
     load_retention_policy_names,
+    load_source_catalog,
     load_sources,
     make_jinja_env,
     read_yaml,
@@ -28,6 +29,14 @@ def write_text(path: Path, value: str) -> None:
 
 def write_json(path: Path, value: dict[str, object]) -> None:
     write_text(path, json.dumps(value, indent=2, sort_keys=True))
+
+
+def remove_stale_index_templates(expected_names: set[str]) -> None:
+    template_dir = REPO_ROOT / "gitops/rendered/opensearch/index-templates"
+    template_dir.mkdir(parents=True, exist_ok=True)
+    for path in sorted(template_dir.glob("*.json")):
+        if path.name not in expected_names:
+            path.unlink()
 
 
 def credential_ids_by_customer() -> dict[str, list[str]]:
@@ -90,9 +99,10 @@ def stream_template(stream: str, policy_id: str) -> dict[str, object]:
 
 def render() -> None:
     validate_all()
+    source_catalog = load_source_catalog()
     customers = load_customers()
     retention_names = load_retention_policy_names()
-    sources = load_sources(customers, retention_names)
+    sources = load_sources(customers, retention_names, source_catalog)
     credentials = credential_ids_by_customer()
 
     env = make_jinja_env(REPO_ROOT)
@@ -124,6 +134,15 @@ def render() -> None:
         REPO_ROOT / "gitops/rendered/opensearch/streams.yml",
         yaml.safe_dump({"streams": sorted(streams)}, sort_keys=True),
     )
+    expected_template_names: set[str] = set()
+    for source in sources:
+        stream = f"logs-{source.customer}-{source.dataset}"
+        expected_template_names.add(f"{stream}-template.json")
+        expected_template_names.add(f"{stream}-quarantine-template.json")
+    for customer in customers.values():
+        unknown_stream = f"logs-{customer.slug}-unknown-quarantine"
+        expected_template_names.add(f"{unknown_stream}-template.json")
+    remove_stale_index_templates(expected_template_names)
     for source in sources:
         stream = f"logs-{source.customer}-{source.dataset}"
         write_json(

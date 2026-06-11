@@ -1,0 +1,11 @@
+apiVersion: siem.local/v1
+kind: Source
+customer: acme
+id: windows-sysmon
+name: Acme Windows Sysmon events
+dataset: windows-sysmon
+parser: windows-sysmon-json
+retentionPolicy: standard-7d
+priority: standard
+dailyVolumeBudgetGb: 1
+enabled: true

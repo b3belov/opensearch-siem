@@ -47,6 +47,7 @@ logstash/pipeline/                 Central ingest, routing, normalization, outpu
 opensearch/base/                   Base OpenSearch templates, ISM policies, roles
 relay/templates/                   Customer-local Logstash relay templates
 scripts/                           Validation, rendering, reconcile, relay helpers
+source-catalog/                    Controlled `siem.source_id` catalog
 data/                              Local runtime state, ignored by git
 secrets/                           Local generated secrets and certs, ignored by git
 ```
@@ -140,8 +141,9 @@ PYTHON=.venv/bin/python bash scripts/test-gitops-config.sh
 PYTHON=.venv/bin/python bash scripts/test-rendered-gitops-config.sh
 ```
 
-The default sample customer is `acme`, with sources such as `firewall` and
-`windows`. Generated stream names follow the pattern:
+The default sample customer is `acme`, with catalog-controlled sources
+`generic-syslog`, `windows-ad`, and `windows-sysmon`. Generated stream names
+follow the pattern:
 
 ```text
 logs-<customer_slug>-<dataset>
@@ -152,11 +154,19 @@ alerts-<customer_slug>
 Examples:
 
 ```text
-logs-acme-firewall
-logs-acme-windows
+logs-acme-generic-syslog
+logs-acme-windows-ad
+logs-acme-windows-sysmon
 logs-acme-unknown-quarantine
 alerts-acme
 ```
+
+## Source Catalog
+
+`source-catalog/sources.yml` is the controlled list of `siem.source_id` values.
+Central GitOps source records and customer forwarder local config must use these
+IDs exactly. Version one supports `generic-syslog`, `windows-ad`, and
+`windows-sysmon`.
 
 ## Start The Stack
 
@@ -227,7 +237,7 @@ Example event shape:
 ```json
 {
   "siem": {
-    "source_id": "firewall"
+    "source_id": "generic-syslog"
   },
   "message": "test event"
 }
@@ -240,7 +250,7 @@ curl --cacert secrets/certs/central-ca.crt \
   -u "acme-primary:$(cat secrets/local/customer-acme-password)" \
   -H 'Content-Type: application/json' \
   https://127.0.0.1:5044/ \
-  -d '{"siem":{"source_id":"firewall"},"message":"test event"}'
+  -d '{"siem":{"source_id":"generic-syslog"},"message":"test event"}'
 ```
 
 Accepted events are enriched with trusted `customer.slug`,

@@ -1,7 +1,9 @@
 streams:
 - alerts-acme
-- logs-acme-firewall
-- logs-acme-firewall-quarantine
+- logs-acme-generic-syslog
+- logs-acme-generic-syslog-quarantine
 - logs-acme-unknown-quarantine
-- logs-acme-windows
-- logs-acme-windows-quarantine
+- logs-acme-windows-ad
+- logs-acme-windows-ad-quarantine
+- logs-acme-windows-sysmon
+- logs-acme-windows-sysmon-quarantine

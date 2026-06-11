@@ -10,7 +10,7 @@
     "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,40}$" },
     "name": { "type": "string", "minLength": 1 },
     "dataset": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,40}$" },
-    "parser": { "type": "string", "enum": ["generic-syslog", "windows-json", "passthrough"] },
+    "parser": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,40}$" },
     "retentionPolicy": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,40}$" },
     "priority": { "type": "string", "enum": ["critical", "standard", "noisy"] },
     "dailyVolumeBudgetGb": { "type": "number", "minimum": 0 },
