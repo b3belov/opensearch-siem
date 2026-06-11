@@ -1,7 +1,7 @@
 # Hardening Ledger: 2026-06-10-customer-forwarder-logstash
 
 **Plan:** [2026-06-10-customer-forwarder-logstash.md](./2026-06-10-customer-forwarder-logstash.md)
-**Status:** in-progress
+**Status:** stopped-by-user
 **Verified at commit:** 738dbb2ee041a55d8c3a88c23d1a214631fdf124
 
 ---
@@ -219,3 +219,112 @@
 ### Iteration summary
 - Findings raised: 12 | applied: 12 | rejected: 0 | deferred: 0
 - Plan commit: 738dbb2ee041a55d8c3a88c23d1a214631fdf124
+
+## Iteration 3 — 2026-06-11 09:41
+
+**Dispatched concerns:** ISSUES, UX, reusability, security, performance
+**Codebase commit at analysis:** 4cf0a8ac3bcbf54b09ae3d0e85c131a9c9d199b9
+
+### Findings
+
+#### F-3.1 — [severity: high] — [ISSUES] — Clean-checkout Logstash validation still depended on local `.env` and ignored certs
+- **Location in plan:** Task 4, Step 6
+- **Description:** The wrapper validated through the main Compose file, so a clean checkout could still fail on a missing `.env` or accidentally use customer-local ignored material.
+- **Suggested change:** Generate temp env, CA, HTTP cert material, and a standalone validation Compose file under a temp project directory.
+- **Decision:** applied
+- **Plan diff:** Replaced the wrapper with a temp-only validation path and added an early resolved-digest check before Docker validation.
+
+#### F-3.2 — [severity: med] — [security/UX] — Windows HTTP collectors needed a deployable sender/security contract
+- **Location in plan:** Task 3, Task 4, Task 5 README
+- **Description:** Windows AD/Sysmon HTTP ports were documented as plain HTTP examples without a production sender path or local collector authentication.
+- **Suggested change:** Require Logstash HTTP input TLS, Basic auth, and client-certificate authentication; document sender requirements and provide Windows examples.
+- **Decision:** applied
+- **Plan diff:** Added `http_collector` config/schema, HTTP input TLS/auth rendering, `.env.example` credentials, `http-certs` volume, README curl examples, and `examples/windows/` sender docs/script.
+
+#### F-3.3 — [severity: med] — [security] — CA validation accepted fake PEM wrappers
+- **Location in plan:** Task 4, Step 5
+- **Description:** `ssl.PEM_cert_to_DER_cert` could accept syntactic wrappers that were not usable CA trust files.
+- **Suggested change:** Validate CA files with `ssl.create_default_context(cafile=...)` and generate real temporary CA material in tests.
+- **Decision:** applied
+- **Plan diff:** Updated validation and tests to use real self-signed CA generation plus a fake PEM negative test.
+
+#### F-3.4 — [severity: med] — [security/reusability] — Central credential ID validation was looser than the catalog contract
+- **Location in plan:** Task 4, Step 5
+- **Description:** Forwarder credentials allowed uppercase, dots, colons, and underscores even though central IDs should use the same stable lowercase slug convention.
+- **Suggested change:** Enforce `^[a-z][a-z0-9-]{1,40}$` and add negative tests.
+- **Decision:** applied
+- **Plan diff:** Added `CENTRAL_CREDENTIAL_ID_RE` and tests for uppercase, underscore, dot, colon, and overlong IDs.
+
+#### F-3.5 — [severity: med] — [ISSUES] — Parser branches had duplicate mutate replacement blocks and weak smoke assertions
+- **Location in plan:** Task 4 parser files; Task 5 parser smoke
+- **Description:** AD and Sysmon parser branches used repeated `replace` blocks, and smoke coverage did not prove AD 4625 failure or Sysmon event 3 network classification.
+- **Suggested change:** Merge `replace` hashes and assert the important parser outputs in the Docker-backed smoke.
+- **Decision:** applied
+- **Plan diff:** Merged parser replacements, changed the Sysmon fixture to event ID 3, and added parser-smoke assertions for AD action/outcome and Sysmon network action/category.
+
+#### F-3.6 — [severity: med] — [ISSUES] — Parser smoke bound fixed host ports
+- **Location in plan:** Task 5 parser smoke
+- **Description:** Fixed localhost ports made the smoke test flaky on developer and CI hosts.
+- **Suggested change:** Let Docker allocate host ports dynamically and inspect the mapped ports before sending fixtures.
+- **Decision:** applied
+- **Plan diff:** Parser smoke now publishes `127.0.0.1::container_port`, resolves mapped ports with `docker port`, and sends to those mapped ports.
+
+#### F-3.7 — [severity: med] — [reusability] — Relay generation still bypassed full catalog validation
+- **Location in plan:** Task 2, Step 4
+- **Description:** The relay helper directly read desired source YAML and could miss the same dataset/parser enforcement used by central GitOps.
+- **Suggested change:** Have relay generation call `load_source_catalog()`, `load_customers()`, `load_retention_policy_names()`, and `load_sources(...)` before filtering syslog sources.
+- **Decision:** applied
+- **Plan diff:** Replaced the direct enumeration path and added a relay regression requiring catalog mismatch failures to surface.
+
+#### F-3.8 — [severity: med] — [performance/ISSUES] — Disk sizing undercounted multi-pipeline persistent queues
+- **Location in plan:** Task 3, Task 4, Task 5 README
+- **Description:** Global persisted queues across three pipelines would consume more disk than the one-queue headroom formula.
+- **Suggested change:** Persist only the output pipeline, keep upstream pipelines in-memory, and test the queue scope.
+- **Decision:** applied
+- **Plan diff:** Added `queue.type: memory` to `inputs` and `parse-and-normalize`, `queue.type: persisted` to `output-ingest-edge`, and tests/documentation for one queue plus one DLQ.
+
+#### F-3.9 — [severity: med] — [performance] — Load smoke could pass while output was backed up
+- **Location in plan:** Task 5 load smoke
+- **Description:** The helper accepted client-side POST success without requiring output pipeline progress or bounded queue growth.
+- **Suggested change:** Require output `events.out` advancement by count or threshold and default max queue growth to zero.
+- **Decision:** applied
+- **Plan diff:** Added `validate_stats_progress()`, `--min-output-events`, `--max-queue-growth`, HTTPS/auth options, and unit tests for output delta and queue growth.
+
+#### F-3.10 — [severity: med] — [UX/reusability] — Central-to-customer handoff and first-run proof were missing
+- **Location in plan:** Task 5 README; Task 6 summary
+- **Description:** The plan did not state what central operators must hand to customers or what evidence proves the first run worked.
+- **Suggested change:** Add a handoff checklist and first-run proof commands/output expectations.
+- **Decision:** applied
+- **Plan diff:** Added README handoff/proof section and final summary bullets for credential/catalog handoff and runtime proof.
+
+#### F-3.11 — [severity: med] — [reusability] — Catalog snapshot lacked sync provenance
+- **Location in plan:** Task 3, Task 5 catalog-copy tests
+- **Description:** The copied catalog had no generated metadata proving which central commit and files produced it.
+- **Suggested change:** Add a sync script and tracked lock file with commit, timestamp, checksums, and supported IDs.
+- **Decision:** applied
+- **Plan diff:** Added `sync-source-catalog.py`, `source-catalog.lock`, endpoint-helper copy, checksum assertions, and lock-content tests.
+
+#### F-3.12 — [severity: med] — [reusability/ISSUES] — Parser catalog values were not reused for dispatch
+- **Location in plan:** Task 3 input template; Task 4 parser filters; Task 5 compose tests
+- **Description:** Parser branches keyed off `siem.source_id` instead of the catalog parser value, creating drift risk if parser names and source IDs ever differ.
+- **Suggested change:** Render `[@metadata][forwarder][parser]` from the catalog and branch on that metadata.
+- **Decision:** applied
+- **Plan diff:** Added parser metadata rendering, canonical `siem.parser`, parser-branch conditions by metadata, and a test that every catalog parser has a pipeline branch.
+
+#### F-3.13 — [severity: low] — [security/reusability] — Dependencies and image were pinned but not locked
+- **Location in plan:** Task 3 dependencies; Task 4 Compose; Task 5 tests
+- **Description:** Python dependencies and the Logstash image used exact-looking versions without hashes or immutable image digest enforcement.
+- **Suggested change:** Add a hash-locked `requirements.lock` and require the Logstash image to include a resolved `@sha256:` digest.
+- **Decision:** applied
+- **Plan diff:** Added `requirements.lock` generation/install instructions, image digest resolution instructions, Compose/static tests, parser-smoke digest check, and wrapper guardrail.
+
+#### F-3.14 — [severity: low] — [reusability] — Central ingest URL validation was duplicated
+- **Location in plan:** Task 2 relay generation; Task 3 sync; Task 4 env validation; Task 5 catalog-copy tests
+- **Description:** Relay and customer-forwarder validation could diverge because each owned its own central HTTPS URL parser.
+- **Suggested change:** Extract shared endpoint validation and copy it into the customer package with shared test vectors.
+- **Decision:** applied
+- **Plan diff:** Added `scripts/lib/endpoint_validation.py`, copied it through the forwarder sync script, imported it in `validate-env.py`, and added copy/vector tests.
+
+### Iteration summary
+- Findings raised: 14 | applied: 14 | rejected: 0 | deferred: 0
+- Plan commit: pending
