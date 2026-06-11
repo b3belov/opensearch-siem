@@ -12,6 +12,13 @@ paths=(
   "secrets/certs/central.crt"
   "relay/bundles/acme-forwarder.tar.gz"
   "gitops/rendered/secrets/decrypted.yml"
+  "customer-forwarder/.env"
+  "customer-forwarder/certs/central-ca.crt"
+  "customer-forwarder/certs/customer-forwarder.key"
+  "customer-forwarder/http-certs/server.crt"
+  "customer-forwarder/http-certs/server.pkcs8.key"
+  "customer-forwarder/http-certs/client.pfx"
+  "customer-forwarder/data/logstash/queue/page.0"
 )
 
 for path in "${paths[@]}"; do

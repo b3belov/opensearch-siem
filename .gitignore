@@ -10,9 +10,19 @@ secrets/certs/*.crt
 secrets/certs/*.srl
 relay/bundles/
 gitops/rendered/secrets/
+customer-forwarder/.env
+customer-forwarder/certs/*.crt
+customer-forwarder/certs/*.key
+customer-forwarder/http-certs/*.crt
+customer-forwarder/http-certs/*.key
+customer-forwarder/http-certs/*.p12
+customer-forwarder/http-certs/*.pfx
 
 data/opensearch/
 data/logstash/
 data/backups/
+customer-forwarder/data/
+customer-forwarder/logs/
+customer-forwarder/tmp/
 logs/
 tmp/

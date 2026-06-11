@@ -48,6 +48,7 @@ opensearch/base/                   Base OpenSearch templates, ISM policies, role
 relay/templates/                   Customer-local Logstash relay templates
 scripts/                           Validation, rendering, reconcile, relay helpers
 source-catalog/                    Controlled `siem.source_id` catalog
+customer-forwarder/                 Customer-located static Logstash forwarder package
 data/                              Local runtime state, ignored by git
 secrets/                           Local generated secrets and certs, ignored by git
 ```
@@ -288,6 +289,15 @@ customer relay host at the path expected by the generated relay pipeline, set
 Relay bundles are ignored by git because they may contain deployment-specific
 material.
 
+## Customer Forwarder Package
+
+`customer-forwarder/` is the version-one static customer-side Logstash package.
+It uses the controlled source catalog plus a tracked catalog lock, validates
+local source IDs, parses Windows AD, Windows Sysmon, and generic syslog inputs,
+secures Windows HTTP JSON collectors with TLS/auth, buffers central-delivery
+outages with the output pipeline's persistent queue, and forwards normalized
+JSON to `ingest-edge`.
+
 ## GitOps Change Flow
 
 Use this flow for customer, source, credential metadata, allowlist, retention,
@@ -346,9 +356,10 @@ PYTHON=.venv/bin/python bash scripts/test-opensearch-reconciler.sh
 PYTHON=.venv/bin/python bash scripts/test-ingest-edge.sh
 bash scripts/test-target-compose.sh
 bash scripts/test-local-env.sh
-bash scripts/test-secret-ignore.sh
+PYTHON=.venv/bin/python bash scripts/test-secret-ignore.sh
 RELAY_CENTRAL_URL=https://siem.example.com:5044 PYTHON=.venv/bin/python bash scripts/test-relay-bundle.sh
 bash scripts/test-logstash-config.sh
+PYTHON=.venv/bin/python bash scripts/test-customer-forwarder.sh
 ```
 
 `scripts/test-logstash-config.sh` and parts of `scripts/test-ingest-edge.sh`
@@ -514,8 +525,8 @@ Then proceed with the reconciler and remaining service startup as normal.
   from event payload fields.
 - Customer slugs are part of stream names. Treat them as immutable after data is
   written.
-- Do not commit `.env`, generated secrets, certificates, relay bundles, or local
-  data.
+- Do not commit `.env`, generated secrets, certificates, relay bundles,
+  customer-forwarder secret/cert material, or local data.
 
 ## Troubleshooting
 
