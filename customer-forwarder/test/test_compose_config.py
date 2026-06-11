@@ -32,6 +32,7 @@ def test_compose_ports_match_enabled_forwarder_sources() -> None:
 def test_pipelines_have_explicit_worker_and_batch_settings() -> None:
     pipelines = yaml.safe_load((ROOT / "config" / "pipelines.yml").read_text(encoding="utf-8"))
     for pipeline in pipelines:
+        assert isinstance(pipeline["path.config"], str)
         assert "pipeline.workers" in pipeline
         assert "pipeline.batch.size" in pipeline
         assert "pipeline.batch.delay" in pipeline
@@ -58,6 +59,13 @@ def test_every_catalog_parser_has_pipeline_branch() -> None:
     )
     for entry in config.catalog.values():
         assert f'[@metadata][forwarder][parser] == "{entry["parser"]}"' in parser_files
+
+
+def test_output_pipeline_uses_http_output_ca_option() -> None:
+    output = (ROOT / "pipeline" / "90-output-ingest-edge.conf").read_text(encoding="utf-8")
+    assert 'ssl_verification_mode => "full"' in output
+    assert 'cacert => "${CENTRAL_CA_CERT}"' in output
+    assert "ssl_certificate_authorities" not in output
 
 
 def test_compose_has_runtime_guardrails() -> None:

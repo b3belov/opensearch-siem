@@ -18,7 +18,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$tmp_dir/certs" "$tmp_dir/http-certs" "$tmp_dir/config" "$tmp_dir/data"
+mkdir -p "$tmp_dir/certs" "$tmp_dir/http-certs" "$tmp_dir/config/certs" "$tmp_dir/config/http" "$tmp_dir/data"
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "$tmp_dir/certs/central-ca.key" \
   -out "$tmp_dir/certs/central-ca.crt" \
