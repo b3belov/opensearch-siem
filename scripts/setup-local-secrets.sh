@@ -55,6 +55,34 @@ if [[ ! -f secrets/certs/opensearch.key || ! -f secrets/certs/opensearch.crt ]];
   chmod 644 secrets/certs/opensearch.crt
 fi
 
+if [[ ! -f secrets/certs/dashboards.key || ! -f secrets/certs/dashboards.crt ]]; then
+  openssl req -nodes -newkey rsa:2048 \
+    -keyout secrets/certs/dashboards.key \
+    -out secrets/certs/dashboards.csr \
+    -subj "/CN=opensearch-dashboards"
+  openssl x509 -req -in secrets/certs/dashboards.csr \
+    -CA secrets/certs/root-ca.crt -CAkey secrets/certs/root-ca.key -CAcreateserial \
+    -out secrets/certs/dashboards.crt -days 825 \
+    -extfile <(printf "subjectAltName=DNS:opensearch-dashboards,DNS:localhost,IP:127.0.0.1")
+  rm -f secrets/certs/dashboards.csr
+  chmod 600 secrets/certs/dashboards.key
+  chmod 644 secrets/certs/dashboards.crt
+fi
+
+if [[ ! -f secrets/certs/dashboards-proxy.key || ! -f secrets/certs/dashboards-proxy.crt ]]; then
+  openssl req -nodes -newkey rsa:2048 \
+    -keyout secrets/certs/dashboards-proxy.key \
+    -out secrets/certs/dashboards-proxy.csr \
+    -subj "/CN=localhost"
+  openssl x509 -req -in secrets/certs/dashboards-proxy.csr \
+    -CA secrets/certs/root-ca.crt -CAkey secrets/certs/root-ca.key -CAcreateserial \
+    -out secrets/certs/dashboards-proxy.crt -days 825 \
+    -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1")
+  rm -f secrets/certs/dashboards-proxy.csr
+  chmod 600 secrets/certs/dashboards-proxy.key
+  chmod 644 secrets/certs/dashboards-proxy.crt
+fi
+
 # v1 single-node: OpenSearch matches the admin client cert by DN (CN=admin)
 # only, so no extendedKeyUsage/keyUsage extensions are required. A multi-node
 # v2+ deployment SHOULD constrain it:
@@ -80,6 +108,8 @@ OPENSEARCH_JAVA_OPTS="-Xms2g -Xmx2g"
 BACKUP_ENABLED=false
 TRUSTED_PROXY_CIDRS=
 OPENSEARCH_CA=secrets/certs/root-ca.crt
+DASHBOARDS_PUBLIC_HOST=localhost
+DASHBOARDS_PROXY_BIND=127.0.0.1
 EOF
 chmod 600 .env
 

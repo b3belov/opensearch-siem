@@ -24,7 +24,7 @@ set -a
 set +a
 OPENSEARCH_URL=https://127.0.0.1:9200 OPENSEARCH_USER=admin OPENSEARCH_PASSWORD="$OPENSEARCH_ADMIN_PASSWORD" \
   .venv/bin/python scripts/reconcile-opensearch-gitops.py
-docker compose up -d opensearch-dashboards central-logstash ingest-edge
+docker compose up -d opensearch-dashboards dashboards-proxy central-logstash ingest-edge
 ```
 
 ## GitOps Change Flow
@@ -49,6 +49,14 @@ Customer streams use readable slugs, for example `logs-acme-firewall`. Customer 
 Customer relays send HTTPS traffic to the central ingest edge on TCP 5044. The ingest edge mounts `secrets/certs/central.crt` and `secrets/certs/central.key`.
 
 IP allowlisting must be enforced where the real customer source IP is visible. The preferred version-one deployment enforces customer allowlists at the host firewall before traffic reaches Docker. If a trusted reverse proxy sits in front of `ingest-edge`, set `TRUSTED_PROXY_CIDRS` to the proxy CIDR only; `ingest-edge` then accepts `X-Forwarded-For` only from those proxy addresses. Do not accept `X-Forwarded-For` directly from the public internet.
+
+## Dashboards Web TLS
+
+Operators access OpenSearch Dashboards through `dashboards-proxy` on HTTPS port 443. The proxy terminates browser-facing TLS using `secrets/certs/dashboards-proxy.crt` and `secrets/certs/dashboards-proxy.key`, then connects to `opensearch-dashboards` over the Docker network using HTTPS.
+
+OpenSearch Dashboards serves internal HTTPS with `secrets/certs/dashboards.crt` and `secrets/certs/dashboards.key`. nginx mounts `secrets/certs/root-ca.crt` and verifies that upstream certificate with SNI `opensearch-dashboards`.
+
+The default proxy bind is localhost-only. To expose Dashboards on a production host, set `DASHBOARDS_PUBLIC_HOST` to the public FQDN and set `DASHBOARDS_PROXY_BIND=0.0.0.0` only after host firewall, VPN, or allowlist controls are in place. Replace `dashboards-proxy.crt` and `dashboards-proxy.key` with public certificate material for the production FQDN.
 
 ## Backup Warning
 

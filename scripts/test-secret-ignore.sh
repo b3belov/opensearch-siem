@@ -10,6 +10,10 @@ paths=(
   "secrets/local/customer-acme-password"
   "secrets/certs/central.key"
   "secrets/certs/central.crt"
+  "secrets/certs/dashboards.key"
+  "secrets/certs/dashboards.crt"
+  "secrets/certs/dashboards-proxy.key"
+  "secrets/certs/dashboards-proxy.crt"
   "relay/bundles/acme-forwarder.tar.gz"
   "gitops/rendered/secrets/decrypted.yml"
 )

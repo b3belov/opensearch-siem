@@ -17,8 +17,10 @@ The default Compose stack starts these central services:
 
 - `opensearch`: single-node OpenSearch 3.6.0 cluster for logs, alerts, templates,
   ISM policies, and security objects.
-- `opensearch-dashboards`: internal Dashboards UI bound to localhost on port
-  `5601`.
+- `opensearch-dashboards`: internal Dashboards UI reachable only on the Docker
+  network and exposed to operators through `dashboards-proxy`.
+- `dashboards-proxy`: hardened nginx reverse proxy for Dashboards HTTPS access on
+  host port `443`; defaults to a localhost-only bind.
 - `central-logstash`: persistent-queue Logstash pipeline that accepts events from
   the ingest edge, validates source metadata, routes events, and writes to
   OpenSearch.
@@ -44,6 +46,7 @@ gitops/schemas/                    JSON schemas for desired-state validation
 ingest-edge/                       HTTPS ingest edge service
 logstash/config/                   Logstash process configuration
 logstash/pipeline/                 Central ingest, routing, normalization, output
+nginx/                             Dashboards reverse-proxy configuration
 opensearch/base/                   Base OpenSearch templates, ISM policies, roles
 relay/templates/                   Customer-local Logstash relay templates
 scripts/                           Validation, rendering, reconcile, relay helpers
@@ -78,6 +81,7 @@ Default container memory limits assume a 32 GB VM:
 | opensearch            | 6g          | 2g       | Heap + Lucene mmap + GC |
 | central-logstash      | 6g          | 2g       | Heap + persistent queue |
 | opensearch-dashboards | 1g          | n/a      | Node.js                 |
+| dashboards-proxy      | 256m        | n/a      | nginx reverse proxy     |
 | ingest-edge           | 512m        | n/a      | Python stdlib           |
 | backup-job            | 256m        | n/a      | curl + bash; backup profile only |
 
@@ -123,6 +127,10 @@ The setup script creates:
 - `secrets/certs/central.crt`
 - `secrets/certs/central.key`
 - `secrets/certs/central-ca.crt`
+- `secrets/certs/dashboards.crt`
+- `secrets/certs/dashboards.key`
+- `secrets/certs/dashboards-proxy.crt`
+- `secrets/certs/dashboards-proxy.key`
 - `data/opensearch/`
 - `data/logstash/`
 - `data/backups/`
@@ -204,18 +212,31 @@ OPENSEARCH_PASSWORD="$OPENSEARCH_ADMIN_PASSWORD" \
 Start the remaining services:
 
 ```bash
-docker compose up -d opensearch-dashboards central-logstash ingest-edge
+docker compose up -d opensearch-dashboards dashboards-proxy central-logstash ingest-edge
 docker compose ps
 ```
 
 Open local services:
 
 - OpenSearch API: `https://127.0.0.1:9200`
-- OpenSearch Dashboards: `http://127.0.0.1:5601`
+- OpenSearch Dashboards: `https://localhost`
 - Ingest edge: `https://<host>:5044`
 
 Dashboards uses the OpenSearch `admin` user. The password is the value of
 `OPENSEARCH_ADMIN_PASSWORD` in `.env`.
+
+By default, `dashboards-proxy` binds ports `80` and `443` to `127.0.0.1` only.
+For production access, set `DASHBOARDS_PUBLIC_HOST` to the real Dashboards FQDN
+and set `DASHBOARDS_PROXY_BIND=0.0.0.0` only after host firewall, VPN, or other
+network access controls allow the intended operator source ranges. Keep
+OpenSearch Dashboards port `5601` unpublished; nginx is the browser-facing entry
+point.
+
+The generated `dashboards-proxy.crt` and `dashboards-proxy.key` are suitable for
+local bootstrap. Production deployments should replace those two files with a
+certificate and key issued for `DASHBOARDS_PUBLIC_HOST`. Keep `dashboards.crt`
+and `dashboards.key` as internal upstream TLS material for nginx-to-Dashboards
+verification.
 
 ## Send A Test Event
 
