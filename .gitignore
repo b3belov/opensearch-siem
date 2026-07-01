@@ -10,6 +10,7 @@ secrets/certs/*.crt
 secrets/certs/*.srl
 relay/bundles/
 gitops/rendered/secrets/
+docs/superpowers/
 
 data/opensearch/
 data/logstash/
