@@ -98,7 +98,7 @@ services:
       opensearch-dashboards:
         condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider --quiet --no-check-certificate https://localhost/ || exit 1"]
+      test: ["CMD-SHELL", "wget --spider --quiet --no-check-certificate https://127.0.0.1/ || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 12

@@ -91,7 +91,7 @@ if ! grep -q "/etc/nginx/certs/root-ca.crt" <<<"$rendered"; then
   exit 1
 fi
 
-if ! grep -q "wget --spider --quiet --no-check-certificate https://localhost/" <<<"$rendered"; then
+if ! grep -q "wget --spider --quiet --no-check-certificate https://127.0.0.1/" <<<"$rendered"; then
   echo "dashboards-proxy must healthcheck the local HTTPS endpoint" >&2
   exit 1
 fi
