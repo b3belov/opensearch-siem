@@ -428,14 +428,22 @@ def relay_cidrs(answer: str) -> list[str]:
     return list(dict.fromkeys(networks))
 
 
-def configured_ingest_url() -> str:
-    url = load_env_values("RELAY_CENTRAL_URL")["RELAY_CENTRAL_URL"]
-    if not url:
-        raise ValueError("Set RELAY_CENTRAL_URL in the repository .env before generating a ledger")
-    validate_https_endpoint(url, field_name="RELAY_CENTRAL_URL")
-    if re.search(r"""["'\\\x00-\x1f\x7f]|\$\{""", url):
-        raise ValueError("RELAY_CENTRAL_URL contains characters unsafe for the relay configuration")
-    return url
+def prompt_ingest_url() -> str:
+    def validate(url: str) -> str:
+        validate_https_endpoint(url, field_name="Central ingest URL")
+        if re.search(r"""["'\\\x00-\x1f\x7f]|\$\{""", url):
+            raise ValueError("Central ingest URL contains characters unsafe for the relay configuration")
+        return url
+
+    default = load_env_values("RELAY_CENTRAL_URL")["RELAY_CENTRAL_URL"]
+    if default:
+        try:
+            validate(default)
+        except ValueError:
+            print("Configured RELAY_CENTRAL_URL is invalid. Enter an HTTPS endpoint for this ledger.")
+            default = ""
+    prompt = f"Central ingest HTTPS URL [{default}]: " if default else "Central ingest HTTPS URL: "
+    return ask(prompt, lambda answer: validate(answer or default))
 
 
 def ingest_ca(answer: str) -> tuple[Path, str]:
@@ -585,7 +593,7 @@ def edit_customer(customer: Customer, customers: dict[str, Customer]) -> bool:
 
     ledger_settings = None
     if confirm("Regenerate the forwarder ledger using the existing credential and sources? [y/N]: "):
-        url = configured_ingest_url()
+        url = prompt_ingest_url()
         print(f"Ingest endpoint {url}")
         _, ca = ask(f"Public ingest CA path [{DEFAULT_CA}]: ", ingest_ca)
         ledger_settings = (url, ca)
@@ -1008,7 +1016,7 @@ def setup_customer(customers: dict[str, Customer]) -> bool:
     name = ask("Customer name: ", lambda answer: customer_name(answer, customers))
     slug = ask("Customer slug: ", customer_slug)
     cidrs = ask("Relay egress CIDRs (comma-separated): ", relay_cidrs)
-    url = configured_ingest_url()
+    url = prompt_ingest_url()
     ca_path, ca = ask(f"Public ingest CA path [{DEFAULT_CA}]: ", ingest_ca)
 
     print(f"\nCustomer {name} ({slug})")
