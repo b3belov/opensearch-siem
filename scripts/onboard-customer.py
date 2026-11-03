@@ -361,11 +361,21 @@ def relay_cidrs(answer: str) -> list[str]:
     return list(dict.fromkeys(networks))
 
 
-def ingest_url(answer: str) -> str:
-    validate_https_endpoint(answer)
-    if re.search(r"""["'\\\x00-\x1f\x7f]|\$\{""", answer):
-        raise ValueError("Central ingest URL contains characters unsafe for the relay configuration")
-    return answer
+def configured_ingest_url() -> str:
+    result = subprocess.run(
+        ["bash", "-ec", 'if [[ -f .env ]]; then . ./.env >/dev/null; fi; '
+         'printf "%s" "${RELAY_CENTRAL_URL:-}"'],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    if result.returncode:
+        raise ValueError("Could not load the repository .env. Check its shell syntax")
+    url = result.stdout
+    if not url:
+        raise ValueError("Set RELAY_CENTRAL_URL in the repository .env before generating a ledger")
+    validate_https_endpoint(url, field_name="RELAY_CENTRAL_URL")
+    if re.search(r"""["'\\\x00-\x1f\x7f]|\$\{""", url):
+        raise ValueError("RELAY_CENTRAL_URL contains characters unsafe for the relay configuration")
+    return url
 
 
 def ingest_ca(answer: str) -> tuple[Path, str]:
@@ -499,7 +509,8 @@ def edit_customer(customer: Customer, customers: dict[str, Customer]) -> bool:
 
     ledger_settings = None
     if confirm("Regenerate the forwarder ledger using the existing credential and sources? [y/N]: "):
-        url = ask("Central ingest HTTPS URL: ", ingest_url)
+        url = configured_ingest_url()
+        print(f"Ingest endpoint {url}")
         _, ca = ask(f"Public ingest CA path [{DEFAULT_CA}]: ", ingest_ca)
         ledger_settings = (url, ca)
         print("The new ledger will replace handoff.txt if it already exists.")
@@ -522,7 +533,7 @@ def setup_customer(customers: dict[str, Customer]) -> bool:
     name = ask("Customer name: ", lambda answer: customer_name(answer, customers))
     slug = ask("Customer slug: ", customer_slug)
     cidrs = ask("Relay egress CIDRs (comma-separated): ", relay_cidrs)
-    url = ask("Central ingest HTTPS URL: ", ingest_url)
+    url = configured_ingest_url()
     ca_path, ca = ask(f"Public ingest CA path [{DEFAULT_CA}]: ", ingest_ca)
 
     print(f"\nCustomer {name} ({slug})")

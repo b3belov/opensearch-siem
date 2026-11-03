@@ -286,6 +286,11 @@ customer unknown-quarantine stream.
 
 ## Customer Onboarding Wizard
 
+Set `RELAY_CENTRAL_URL` in the repository's `.env` to the HTTPS ingest endpoint
+reachable by customer forwarders. The wizard reads this value for new and
+regenerated ledgers. If `.env` does not define the key, the wizard uses an
+exported `RELAY_CENTRAL_URL`.
+
 From the repository root, run the wizard with the GitOps Python environment:
 
 ```bash
@@ -296,12 +301,12 @@ The wizard shows a numbered list of existing customers by name and slug, plus
 a **New** option.
 
 - Select **New** to enter a name, slug, comma-separated relay egress CIDRs,
-  central ingest HTTPS URL, and path to the public ingest CA certificate.
+  and path to the public ingest CA certificate.
   Review and confirm to create a `generic-syslog` source and a `<slug>-primary`
   credential.
 - Select an existing customer to edit its name and relay egress CIDRs. Press
   Enter at either prompt to keep the current value. To regenerate the forwarder
-  ledger, supply the central ingest HTTPS URL and public ingest CA path. The
+  ledger, supply the public ingest CA path and review the configured URL. The
   generator uses the first enabled credential and the enabled syslog sources.
   Editing preserves the customer's slug, credentials, password, and sources.
 
