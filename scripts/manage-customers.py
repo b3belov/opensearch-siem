@@ -31,6 +31,7 @@ from lib.gitops_config import (
 
 CUSTOMERS = DESIRED / "customers"
 DELETIONS = REPO_ROOT / "tmp/customer-deletions"
+CLEANUP_COMPLETE = "cleanup-complete"
 SOURCE_ID = "generic-syslog"
 DEFAULT_CA = "secrets/certs/central-ca.crt"
 LEDGER_FILENAME = "handoff.txt"
@@ -785,6 +786,9 @@ def archived_customers() -> dict[str, Customer]:
     for path in sorted(DELETIONS.glob("*/customer.yml")):
         if path.is_symlink() or path.parent.is_symlink():
             continue
+        marker = path.with_name(CLEANUP_COMPLETE)
+        if marker.is_file() and not marker.is_symlink():
+            continue
         document = read_yaml(path)
         validate_schema(document, "customer.schema.json", path)
         slug = document["slug"]
@@ -902,7 +906,7 @@ def remove_archived_local_files(customer: Customer, references: set[str]) -> Non
 def resume_removal() -> None:
     archives = archived_customers()
     if not archives:
-        print("No local customer deletion archives found.")
+        print("No archived customers pending removal.")
         return
     customer = select_customer(archives, archived=True)
     if not isinstance(customer, Customer):
@@ -913,7 +917,8 @@ def resume_removal() -> None:
     print(f"Resuming removal for {customer.name} ({slug}).")
     credentials = read_customer_credentials(customer.path.parent)
     streams = archived_streams(customer)
-    remove_archived_local_files(customer, {item["secretRef"] for item in credentials})
+    references = {item["secretRef"] for item in credentials}
+    remove_archived_local_files(customer, references)
 
     stale = remaining_rendered_files(slug, streams)
     if stale:
@@ -942,14 +947,23 @@ def resume_removal() -> None:
             raise ValueError("Archive changed during confirmation. OpenSearch cleanup stopped")
         verify_purge_endpoint(env["OPENSEARCH_URL"])
         verify_receiver_revoked(slug, {item["id"] for item in credentials}, streams)
-        purge_customer_streams(
+        streams_clear = purge_customer_streams(
             env, streams, confirm, lambda names: backup_customer_data(env, names), allow_delete=applied,
         )
         ledger = REPO_ROOT / "relay/bundles" / slug / LEDGER_FILENAME
-        review_customer_templates(
+        templates_clear = review_customer_templates(
             env, streams, confirm,
             lambda templates: backup_customer_configuration(customer.path.parent, ledger, templates),
         )
+        passwords_remain = any(
+            os.path.lexists(path) for path in unshared_customer_secrets(slug, references)
+        )
+        if streams_clear and templates_clear and not passwords_remain and not os.path.lexists(ledger):
+            if not remaining_rendered_files(slug, streams):
+                marker = customer.path.with_name(CLEANUP_COMPLETE)
+                with marker.open("x", encoding="utf-8") as completion:
+                    completion.write("Verified customer cleanup complete. Keep this archive to reserve the slug.\n")
+                print(f"Removal complete for {slug}. It will no longer appear under Resume removal.")
 
 
 def setup_customer(customers: dict[str, Customer]) -> bool:

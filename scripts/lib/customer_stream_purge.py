@@ -49,8 +49,8 @@ def _validate_stream_names(names: set[str]) -> None:
 def purge_customer_streams(
     env: dict[str, str], names: set[str], confirm: Callable[[str], bool],
     backup: Callable[[set[str]], bool], *, allow_delete: bool = True,
-) -> None:
-    """Delete only the caller's customer-owned streams that the operator confirms."""
+) -> bool:
+    """Return whether all targeted streams are absent after review."""
     _validate_stream_names(names)
     base_url, request = _cleanup_client(env)
     present = {}
@@ -71,34 +71,40 @@ def purge_customer_streams(
 
     if not present:
         print("No matching customer data streams were found in OpenSearch.")
-        return
+        return True
 
     print(f"\nVerified customer data streams at {base_url}:")
     for name in present:
         print(f"  {name}")
     if not allow_delete:
         print("Streams were kept. Apply the deployment preview during this run to enable permanent deletion.")
-        return
+        return False
     if not confirm("Prepare permanent deletion of the listed data streams? [y/N]: "):
         print("OpenSearch data deletion skipped.")
-        return
+        return False
     if not backup(set(present)):
-        return
+        return False
     print("Permanent deletion also removes the backing indexes.")
     print("If a deletion fails, earlier deletions remain in effect. Verify your backups first.")
     if not confirm("Permanently delete the listed OpenSearch data streams? [y/N]: "):
         print("OpenSearch data deletion skipped.")
-        return
+        return False
 
+    all_clear = True
     for name, original in present.items():
         path = f"/_data_stream/{name}"
-        if request("GET", path) != original:
-            print(f"Keeping OpenSearch data stream {name}: it changed or disappeared after review.")
+        current = request("GET", path)
+        if current is None:
+            continue
+        if current != original:
+            print(f"Keeping OpenSearch data stream {name}: it changed after review.")
+            all_clear = False
             continue
         result = request("DELETE", path)
         if result is None or result.get("acknowledged") is not True:
             raise ValueError(f"OpenSearch did not acknowledge deletion of {name}")
         print(f"Deleted OpenSearch data stream {name}.")
+    return all_clear
 
 
 def _stream_dependencies(response: dict | None) -> tuple[set[str], set[str]]:
@@ -138,12 +144,13 @@ def _customer_template(response: dict, name: str, stream: str) -> bool:
 def review_customer_templates(
     env: dict[str, str], streams: set[str], confirm: Callable[[str], bool],
     backup: Callable[[dict[str, dict]], bool],
-) -> None:
-    """Offer exact template cleanup while preserving templates used by data streams."""
+) -> bool:
+    """Return whether all targeted templates are absent after review."""
     _validate_stream_names(streams)
     base_url, request = _cleanup_client(env)
     names_in_use, templates_in_use = _stream_dependencies(request("GET", "/_data_stream"))
     removable = {}
+    all_clear = True
     for stream in sorted(streams):
         if not stream.startswith("logs-"):
             continue
@@ -153,42 +160,49 @@ def review_customer_templates(
             continue
         if not _customer_template(result, name, stream):
             print(f"Keeping OpenSearch template {name}: its definition could not be verified.")
+            all_clear = False
         elif stream in names_in_use or name in templates_in_use:
             print(f"Keeping OpenSearch template {name}: a data stream still uses or matches it.")
+            all_clear = False
         else:
             removable[name] = (stream, result)
 
     if not removable:
         print("No verified unused customer templates to remove.")
-        return
+        return all_clear
 
     print(f"Unused customer templates at {base_url}:")
     for name in removable:
         print(f"  {name}")
     if not confirm("Prepare removal of the listed unused index templates? [y/N]: "):
         print("OpenSearch template removal skipped.")
-        return
+        return False
     definitions = {
         name: original["index_templates"][0]["index_template"]
         for name, (_, original) in removable.items()
     }
     if not backup(definitions):
-        return
+        return False
     if not confirm("Remove the listed unused OpenSearch index templates? [y/N]: "):
         print("OpenSearch template removal skipped.")
-        return
+        return False
 
     for name, (stream, original) in removable.items():
         path = f"/_index_template/{name}"
         current = request("GET", path)
+        if current is None:
+            continue
         if current != original:
-            print(f"Keeping OpenSearch template {name}: it changed or disappeared after review.")
+            print(f"Keeping OpenSearch template {name}: it changed after review.")
+            all_clear = False
             continue
         names_in_use, templates_in_use = _stream_dependencies(request("GET", "/_data_stream"))
         if stream in names_in_use or name in templates_in_use:
             print(f"Keeping OpenSearch template {name}: a data stream now uses or matches it.")
+            all_clear = False
             continue
         result = request("DELETE", path)
         if result is None or result.get("acknowledged") is not True:
             raise ValueError(f"OpenSearch did not acknowledge template removal for {name}")
         print(f"Removed OpenSearch template {name}.")
+    return all_clear

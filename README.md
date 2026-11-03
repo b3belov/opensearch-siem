@@ -398,8 +398,9 @@ deletion also requires a successful deployment in the current wizard run.
 Templates still used by retained streams are kept. Historical OpenSearch
 objects outside the archive's configuration may require separate review.
 
-The archive stays in place so you can run these checks again after an
-interruption. Resume removal requires an existing local archive.
+Resume removal requires an existing local archive. After the wizard verifies
+that local cleanup and OpenSearch cleanup are complete, the customer drops
+out of the resume list. The archive stays in place to reserve the slug.
 
 ## Customer Relay Bundles
 
