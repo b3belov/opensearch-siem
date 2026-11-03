@@ -292,10 +292,22 @@ From the repository root, run the wizard with the GitOps Python environment:
 .venv/bin/python scripts/onboard-customer.py
 ```
 
-Enter the customer name and slug, comma-separated relay egress CIDRs, central
-ingest HTTPS URL, and path to the public ingest CA certificate. Review the
-settings and confirm to create a `generic-syslog` source and a `<slug>-primary`
-credential.
+The wizard shows a numbered list of existing customers by name and slug, plus
+a **New** option.
+
+- Select **New** to enter a name, slug, comma-separated relay egress CIDRs,
+  central ingest HTTPS URL, and path to the public ingest CA certificate.
+  Review and confirm to create a `generic-syslog` source and a `<slug>-primary`
+  credential.
+- Select an existing customer to edit its name and relay egress CIDRs. Press
+  Enter at either prompt to keep the current value. To regenerate the forwarder
+  ledger, supply the central ingest HTTPS URL and public ingest CA path. The
+  generator uses the first enabled credential and the enabled syslog sources.
+  Editing preserves the customer's slug, credentials, password, and sources.
+
+Invalid answers, such as a malformed CIDR or a name already used by another
+customer, repeat the same prompt. Name matching ignores case and differences in
+whitespace.
 
 - `gitops/desired/customers/<slug>/` holds the customer, allowlist, credential
   reference, and source configuration.
@@ -312,9 +324,25 @@ credential.
   Base64 makes the ledger copyable. The forwarder password is supplied
   separately.
 
-Follow the [GitOps change flow](#gitops-change-flow) to render the new desired
-state, reconcile OpenSearch, and restart the ingest services before the relay
-sends events.
+On the central SIEM host, the wizard offers to preview deployment after a
+customer is created or its desired configuration changes. Regenerating only
+the ledger skips the deployment prompt. For the local Compose setup, load the
+admin settings before starting the wizard:
+
+```bash
+set -a
+. ./.env
+set +a
+.venv/bin/python scripts/onboard-customer.py
+```
+
+For other deployments, export `OPENSEARCH_URL`, `OPENSEARCH_USER`,
+`OPENSEARCH_PASSWORD`, and `OPENSEARCH_CA`. The preview renders into temporary
+staging and queries OpenSearch for drift. Applying requires a second
+confirmation. It publishes the live rendered files, reconciles the entire
+GitOps desired state, and restarts `central-logstash` and `ingest-edge`, which
+can briefly interrupt ingestion for all customers. If you skip deployment,
+use the [GitOps change flow](#gitops-change-flow) before sending relay traffic.
 
 ## Customer Relay Bundles
 
