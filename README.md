@@ -298,7 +298,7 @@ From the repository root, run the wizard with the GitOps Python environment:
 ```
 
 The wizard shows a numbered list of existing customers by name and slug, plus
-a **New** option.
+options to create a customer or resume removal of an archived customer.
 
 - Select **New** to enter a name, slug, comma-separated relay egress CIDRs,
   and path to the public ingest CA certificate.
@@ -314,6 +314,7 @@ a **New** option.
   asks separately about removing local credential files and the forwarder
   ledger. It keeps both by default and requires you to type the exact customer
   slug before removing anything.
+- Choose **Resume removal** to check what remains for an archived customer.
 
 Invalid answers, such as a malformed CIDR or a name already used by another
 customer, repeat the same prompt. Name matching ignores case and differences in
@@ -357,13 +358,48 @@ Apply the deployment preview to revoke the customer's receiver access.
 Indexed data stays in OpenSearch under its normal retention settings by
 default. Permanent deletion requires the local Compose OpenSearch endpoint.
 If you opt in, the wizard waits for a successful receiver update and a
-healthy receiver, then lists the exact
-verified customer streams and asks for separate confirmation. It deletes
-those streams by exact name. Historical streams outside that list and
-obsolete OpenSearch templates may require separate review. If you skip or
-interrupt deployment or purge, the archived customer no longer appears in
-the selector. Review the deployment status and remaining streams before
-attempting any further cleanup.
+healthy receiver, then lists the exact verified customer streams and asks
+for separate confirmation. It deletes those streams by exact name.
+
+### Final backups before removal
+
+Both **Delete** and **Resume removal** offer a final configuration backup
+before removing customer configuration or remaining local files. If you
+choose to remove verified unused OpenSearch templates, the wizard also
+offers to back up their definitions. The configuration backup is a private
+tar archive under `data/backups/customer-removals/`, which Git ignores. It
+contains the customer's GitOps YAML, any remaining forwarder ledger, and
+the verified template definitions selected for removal when applicable.
+Password files, private keys, and `.env` are excluded.
+
+Before permanently deleting customer streams, the wizard offers an OpenSearch
+snapshot of the exact verified streams selected for deletion. The snapshot
+goes to the registered `SNAPSHOT_REPOSITORY` or the repository configured in
+GitOps when that setting is unset. The wizard verifies that OpenSearch reports
+`SUCCESS` and that the snapshot covers the selected streams before treating
+the data as backed up.
+
+If an applicable backup is skipped, fails, or cannot be verified, type
+`REMOVE WITHOUT BACKUP` at the separate override prompt to continue that
+operation. The override is separate from the final deletion confirmation.
+
+### Resume customer removal
+
+From the customer selector, choose **Resume removal** and select a local
+archive. The wizard reports any remaining unshared password files and
+`handoff.txt` and offers to remove them. It checks the rendered configuration
+for leftover customer entries and offers the deployment preview when receiver
+configuration still needs to be updated.
+
+After checking receiver access, the wizard can offer to purge the customer's
+verified OpenSearch streams or remove unused index templates. Each operation
+requires separate confirmation and targets exact names. Permanent stream
+deletion also requires a successful deployment in the current wizard run.
+Templates still used by retained streams are kept. Historical OpenSearch
+objects outside the archive's configuration may require separate review.
+
+The archive stays in place so you can run these checks again after an
+interruption. Resume removal requires an existing local archive.
 
 ## Customer Relay Bundles
 
