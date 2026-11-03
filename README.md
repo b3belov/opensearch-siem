@@ -336,18 +336,10 @@ whitespace.
 
 On the central SIEM host, the wizard offers to preview deployment after a
 customer is created or its desired configuration changes. Regenerating only
-the ledger skips the deployment prompt. For the local Compose setup, load the
-admin settings before starting the wizard:
-
-```bash
-set -a
-. ./.env
-set +a
-.venv/bin/python scripts/manage-customers.py
-```
-
-For other deployments, export `OPENSEARCH_URL`, `OPENSEARCH_USER`,
-`OPENSEARCH_PASSWORD`, and `OPENSEARCH_CA`. The preview renders into temporary
+the ledger skips the deployment prompt. The wizard loads the local Compose
+admin password from `.env`. For other deployments, set `OPENSEARCH_URL`,
+`OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`, and `OPENSEARCH_CA` in `.env` or
+export them to override the file. The preview renders into temporary
 staging and queries OpenSearch for drift. Applying requires a second
 confirmation. It publishes the live rendered files, reconciles the entire
 GitOps desired state, and restarts `central-logstash` and `ingest-edge`, which

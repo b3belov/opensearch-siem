@@ -264,6 +264,40 @@ def print_ledger(path: Path) -> None:
     print(path.read_text(encoding="ascii"), end="")
 
 
+def load_env_values(*names: str) -> dict[str, str]:
+    result = subprocess.run(
+        ["bash", "-ec", 'if [[ -f .env ]]; then . ./.env >/dev/null; fi; '
+         'for name in "$@"; do printf "%s\\0" "${!name:-}"; done', "bash", *names],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    if result.returncode:
+        raise ValueError("Could not load the repository .env. Check its shell syntax")
+    return dict(zip(names, result.stdout.split("\0")))
+
+
+def deployment_environment() -> dict[str, str]:
+    configured = load_env_values(
+        "OPENSEARCH_URL", "OPENSEARCH_USER", "OPENSEARCH_PASSWORD", "OPENSEARCH_ADMIN_PASSWORD",
+        "OPENSEARCH_CA", "OPENSEARCH_ADMIN_CERT", "OPENSEARCH_ADMIN_KEY",
+        "LOGSTASH_WRITER_USER", "LOGSTASH_WRITER_PASSWORD",
+    )
+    env = {**{name: value for name, value in configured.items() if value}, **os.environ}
+    env.setdefault("OPENSEARCH_URL", "https://127.0.0.1:9200")
+    env.setdefault("OPENSEARCH_USER", "admin")
+    env.setdefault("OPENSEARCH_CA", "secrets/certs/root-ca.crt")
+    if env["OPENSEARCH_USER"] == "admin":
+        env.setdefault("OPENSEARCH_PASSWORD", env.get("OPENSEARCH_ADMIN_PASSWORD", ""))
+    if not env.get("OPENSEARCH_PASSWORD"):
+        raise ValueError("Set OPENSEARCH_PASSWORD in .env or export it before deployment. "
+                         "For the local admin, OPENSEARCH_ADMIN_PASSWORD can supply the password.")
+    ca_path = REPO_ROOT / env["OPENSEARCH_CA"]
+    if not ca_path.is_file():
+        raise ValueError("Set OPENSEARCH_CA to the OpenSearch CA certificate file")
+    env["OPENSEARCH_CA"] = str(ca_path)
+    validate_https_endpoint(env["OPENSEARCH_URL"], field_name="OPENSEARCH_URL")
+    return env
+
+
 def deploy_customer() -> dict[str, str] | None:
     print(
         "\nDeployment is optional. Continue only from the checkout used by the central SIEM.\n"
@@ -279,21 +313,7 @@ def deploy_customer() -> dict[str, str] | None:
             return
     except EOFError:
         return
-
-    env = os.environ.copy()
-    env.setdefault("OPENSEARCH_URL", "https://127.0.0.1:9200")
-    env.setdefault("OPENSEARCH_USER", "admin")
-    env.setdefault("OPENSEARCH_CA", "secrets/certs/root-ca.crt")
-    if env["OPENSEARCH_USER"] == "admin":
-        env.setdefault("OPENSEARCH_PASSWORD", env.get("OPENSEARCH_ADMIN_PASSWORD", ""))
-    if not env.get("OPENSEARCH_PASSWORD"):
-        raise ValueError("Export OPENSEARCH_PASSWORD before deployment. For local admin, "
-                         "you can load OPENSEARCH_ADMIN_PASSWORD from .env as documented in the README.")
-    ca_path = REPO_ROOT / env["OPENSEARCH_CA"]
-    if not ca_path.is_file():
-        raise ValueError("Set OPENSEARCH_CA to the OpenSearch CA certificate file")
-    env["OPENSEARCH_CA"] = str(ca_path)
-    validate_https_endpoint(env["OPENSEARCH_URL"], field_name="OPENSEARCH_URL")
+    env = deployment_environment()
 
     subprocess.run(
         ["git", "status", "--short", "--", "gitops/desired", "gitops/rendered"],
@@ -369,14 +389,7 @@ def relay_cidrs(answer: str) -> list[str]:
 
 
 def configured_ingest_url() -> str:
-    result = subprocess.run(
-        ["bash", "-ec", 'if [[ -f .env ]]; then . ./.env >/dev/null; fi; '
-         'printf "%s" "${RELAY_CENTRAL_URL:-}"'],
-        cwd=REPO_ROOT, capture_output=True, text=True,
-    )
-    if result.returncode:
-        raise ValueError("Could not load the repository .env. Check its shell syntax")
-    url = result.stdout
+    url = load_env_values("RELAY_CENTRAL_URL")["RELAY_CENTRAL_URL"]
     if not url:
         raise ValueError("Set RELAY_CENTRAL_URL in the repository .env before generating a ledger")
     validate_https_endpoint(url, field_name="RELAY_CENTRAL_URL")
