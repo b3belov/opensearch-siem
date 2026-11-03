@@ -279,6 +279,33 @@ Accepted events are enriched with trusted `customer.slug`,
 them. Events with missing, unknown, or disabled `siem.source_id` are sent to the
 customer unknown-quarantine stream.
 
+## Customer Onboarding Wizard
+
+From the repository root, run the wizard with the GitOps Python environment:
+
+```bash
+.venv/bin/python scripts/onboard-customer.py
+```
+
+Enter the customer name and slug, comma-separated relay egress CIDRs, central
+ingest HTTPS URL, and path to the public ingest CA certificate. Review the
+settings and confirm to create a `generic-syslog` source and a `<slug>-primary`
+credential.
+
+- `gitops/desired/customers/<slug>/` holds the customer, allowlist, credential
+  reference, and source configuration.
+- `secrets/local/customer-<slug>-password` holds the password with mode `0600`.
+  Share it with the relay operator separately through a secure channel. If
+  the central host uses another checkout, securely install the same password
+  file there at that path with mode `0600` before deploying the GitOps change.
+- `relay/bundles/<slug>/handoff.tar.gz` is the ignored archive to send to the
+  relay operator. It contains `logstash.yml`, `pipeline.conf`, the public
+  `central-ca.crt`, and a setup and verification README.
+
+Follow the [GitOps change flow](#gitops-change-flow) to render the new desired
+state, reconcile OpenSearch, and restart the ingest services before the relay
+sends events.
+
 ## Customer Relay Bundles
 
 Generate a customer-local Logstash relay bundle from the GitOps customer
