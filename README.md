@@ -298,9 +298,14 @@ credential.
   Share it with the relay operator separately through a secure channel. If
   the central host uses another checkout, securely install the same password
   file there at that path with mode `0600` before deploying the GitOps change.
-- `relay/bundles/<slug>/handoff.tar.gz` is the ignored archive to send to the
-  relay operator. It contains `logstash.yml`, `pipeline.conf`, the public
-  `central-ca.crt`, and a setup and verification README.
+- `relay/bundles/<slug>/handoff.txt` is the ignored text ledger. Copy the
+  complete `SIEM-FORWARDER-V1:...` line printed by the wizard or saved in
+  this file and paste it into the customer-side forwarder configuration
+  script. The text after the prefix is standard Base64 encoding of a
+  gzip-compressed tar archive containing exactly four files at its root
+  (`logstash.yml`, `pipeline.conf`, `central-ca.crt`, and `README.md`).
+  Base64 makes the ledger copyable. The forwarder password is supplied
+  separately.
 
 Follow the [GitOps change flow](#gitops-change-flow) to render the new desired
 state, reconcile OpenSearch, and restart the ingest services before the relay
