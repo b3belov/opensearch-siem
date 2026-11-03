@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 from tempfile import TemporaryDirectory
+from time import monotonic, sleep
 from typing import Callable, Iterator, TypeVar
 from urllib.parse import urlsplit
 
@@ -23,11 +24,13 @@ import yaml
 
 from lib.endpoint_validation import validate_https_endpoint
 from lib.gitops_config import (
-    Customer, DESIRED, REPO_ROOT, customer_dirs, load_customers, read_yaml, validate_schema,
+    Customer, DESIRED, REPO_ROOT, customer_dirs, load_customers, load_retention_policy_names,
+    load_source_catalog, load_sources, read_yaml, validate_schema,
 )
 
 
 CUSTOMERS = DESIRED / "customers"
+DELETIONS = REPO_ROOT / "tmp/customer-deletions"
 SOURCE_ID = "generic-syslog"
 DEFAULT_CA = "secrets/certs/central-ca.crt"
 LEDGER_FILENAME = "handoff.txt"
@@ -192,6 +195,7 @@ def onboard(name: str, slug: str, cidrs: list[str], url: str, ca: str) -> None:
     handoff = REPO_ROOT / "relay/bundles" / slug
 
     with lock_customers():
+        customer_slug(slug)
         for path in (customer, secret, handoff):
             if path.exists() or path.is_symlink():
                 raise ValueError(f"Path already exists: {path.relative_to(REPO_ROOT)}")
@@ -260,7 +264,7 @@ def print_ledger(path: Path) -> None:
     print(path.read_text(encoding="ascii"), end="")
 
 
-def deploy_customer() -> None:
+def deploy_customer() -> dict[str, str] | None:
     print(
         "\nDeployment is optional. Continue only from the checkout used by the central SIEM.\n"
         "Preview renders in staging and queries OpenSearch for drift.\n"
@@ -330,6 +334,7 @@ def deploy_customer() -> None:
     subprocess.run([*compose, "restart", *services], cwd=REPO_ROOT, check=True)
     subprocess.run([*compose, "ps", *services], cwd=REPO_ROOT, check=True)
     print("Wait for both ingest services to be healthy before sending forwarder traffic.")
+    return env
 
 
 def customer_name(answer: str, customers: dict[str, Customer], current_slug: str = "") -> str:
@@ -348,6 +353,8 @@ def customer_slug(answer: str) -> str:
                          "start with a letter and end with a letter or digit")
     if os.path.lexists(CUSTOMERS / answer):
         raise ValueError("Customer slug already exists")
+    if os.path.lexists(DELETIONS / answer):
+        raise ValueError("Customer slug is archived in this checkout and may still own indexed data")
     return answer
 
 
@@ -399,6 +406,13 @@ def select_customer(customers: dict[str, Customer]) -> Customer | None:
         raise ValueError("Enter one of the listed numbers or New")
 
     return ask("Customer selection: ", parse)
+
+
+def customer_action(answer: str) -> str:
+    action = answer.lower() or "edit"
+    if action not in {"edit", "delete"}:
+        raise ValueError("Enter Edit or Delete")
+    return action
 
 
 def save_customer_edit(
@@ -529,6 +543,151 @@ def edit_customer(customer: Customer, customers: dict[str, Customer]) -> bool:
     return bool(changes)
 
 
+def local_customer_secrets(slug: str) -> set[Path]:
+    references = set()
+    shared = set()
+    for directory in customer_dirs():
+        path = directory / "credentials.yml"
+        document = read_yaml(path)
+        validate_schema(document, "customer-credential.schema.json", path)
+        target = references if directory.name == slug else shared
+        target.update(item["secretRef"] for item in document["credentials"])
+    path = DESIRED / "global/service-accounts.yml"
+    document = read_yaml(path)
+    validate_schema(document, "service-account.schema.json", path)
+    shared.update(item["secretRef"] for item in document["accounts"])
+    return {REPO_ROOT / reference for reference in references - shared}
+
+
+def deletion_streams(slug: str, customers: dict[str, Customer]) -> set[str]:
+    sources = load_sources(customers, load_retention_policy_names(), load_source_catalog())
+    streams = {f"alerts-{slug}", f"logs-{slug}-unknown-quarantine"}
+    for source in sources:
+        if source.customer == slug:
+            stream = f"logs-{slug}-{source.dataset}"
+            streams.update((stream, f"{stream}-quarantine"))
+    return streams
+
+
+def delete_customer(customer: Customer) -> tuple[set[str], set[str]] | None:
+    slug = customer.slug
+    directory = customer.path.parent
+    archive = DELETIONS / slug
+    ledger = REPO_ROOT / "relay/bundles" / slug / LEDGER_FILENAME
+    credentials_path = directory / "credentials.yml"
+    original = {path: path.read_bytes() for path in (customer.path, credentials_path)}
+    credentials = yaml.safe_load(original[credentials_path])
+    validate_schema(credentials, "customer-credential.schema.json", credentials_path)
+    credential_ids = {item["id"] for item in credentials["credentials"]}
+    secrets_to_remove = local_customer_secrets(slug)
+    existing_secrets = sorted(path for path in secrets_to_remove if os.path.lexists(path))
+
+    print(f"Delete {customer.name} ({slug}) from desired GitOps configuration.")
+    print("Receiver access is revoked only after deploying the updated configuration.")
+    print("Do not reuse this slug for a different customer while historical data may remain.")
+    if slug == "acme":
+        print("Warning: repository checks that expect the bundled Acme example may fail after removal.")
+    if not confirm("Remove this customer's GitOps configuration? [y/N]: "):
+        return None
+    selected = []
+    if existing_secrets:
+        print("Unshared local password files:", ", ".join(
+            str(path.relative_to(REPO_ROOT)) for path in existing_secrets
+        ))
+        print("Removing a password file can interrupt this customer's relay before deployment.")
+        if confirm("Remove these local password files? [y/N]: "):
+            selected.extend(existing_secrets)
+    if os.path.lexists(ledger) and confirm("Remove the local handoff.txt ledger? [y/N]: "):
+        selected.append(ledger)
+    purge = confirm("Offer permanent deletion of verified OpenSearch streams after deployment? [y/N]: ")
+    if input(f"Type {slug} to confirm removal: ") != slug:
+        print("Deletion cancelled.")
+        return None
+
+    with lock_customers():
+        if directory.is_symlink() or any(path.read_bytes() != data for path, data in original.items()):
+            raise ValueError("Customer configuration changed during confirmation. Reopen the wizard and retry")
+        if os.path.lexists(archive):
+            raise ValueError(f"Customer archive already exists: {archive.relative_to(REPO_ROOT)}")
+        if any(path != ledger and path not in local_customer_secrets(slug) for path in selected):
+            raise ValueError("A selected password file is now shared. Reopen the wizard and retry")
+        for path in selected:
+            if path.parent.is_symlink() or path.is_symlink() or not path.is_file():
+                raise ValueError(f"Expected a regular local file at {path.relative_to(REPO_ROOT)}")
+        streams = deletion_streams(slug, load_customers()) if purge else set()
+        DELETIONS.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with TemporaryDirectory(prefix="customer-delete-", dir=REPO_ROOT / "tmp") as temp:
+            stage = Path(temp)
+            stage_gitops(stage, (), ("validate-gitops-config.py",))
+            shutil.rmtree(stage / directory.relative_to(REPO_ROOT))
+            subprocess.run(
+                [sys.executable, "scripts/validate-gitops-config.py"], cwd=stage, check=True,
+            )
+            with ExitStack() as rollback:
+                for index, path in enumerate(selected):
+                    staged_file = stage / f"removed-{index}"
+                    path.rename(staged_file)
+                    rollback.callback(staged_file.rename, path)
+                directory.rename(archive)
+                rollback.pop_all()
+
+    print(f"Customer configuration archived at {archive.relative_to(REPO_ROOT)}.")
+    for path in selected:
+        print(f"Removed {path.relative_to(REPO_ROOT)}.")
+    return streams, credential_ids
+
+
+def verify_receiver_revoked(slug: str, credential_ids: set[str], streams: set[str]) -> None:
+    if slug in load_customers():
+        raise ValueError("Customer is still in desired configuration. Indexed data was retained")
+    managed = read_yaml(REPO_ROOT / "gitops/rendered/opensearch/streams.yml")["streams"]
+    if streams.intersection(managed):
+        raise ValueError("Some target streams are still managed by GitOps. Indexed data was retained")
+    container = subprocess.check_output(
+        ["docker", "compose", "ps", "-q", "ingest-edge"], cwd=REPO_ROOT, text=True,
+    ).strip()
+    if not container or len(container.splitlines()) != 1:
+        raise ValueError("Could not identify a single running ingest-edge container")
+    print("Waiting for the receiver to become healthy before checking credential revocation.")
+    deadline = monotonic() + 120
+    while True:
+        health = subprocess.check_output(
+            ["docker", "inspect", "--format", "{{.State.Health.Status}}", container],
+            cwd=REPO_ROOT, text=True,
+        ).strip()
+        if health == "healthy":
+            break
+        if monotonic() >= deadline:
+            raise ValueError("Receiver did not become healthy. Indexed data was retained")
+        sleep(3)
+    live = subprocess.check_output(
+        ["docker", "exec", container, "cat", "/app/config/customer-auth.yml"],
+        cwd=REPO_ROOT, text=True,
+    )
+    config = yaml.safe_load(live)
+    credentials = config.get("credentials") if isinstance(config, dict) else None
+    if not isinstance(credentials, dict) or any(
+        not isinstance(item, dict) or not isinstance(item.get("customerSlug"), str)
+        for item in credentials.values()
+    ):
+        raise ValueError("Could not verify the live receiver credentials. Indexed data was retained")
+    if credential_ids.intersection(credentials) or any(
+        item["customerSlug"] == slug for item in credentials.values()
+    ):
+        raise ValueError("The live receiver still lists a customer credential. Indexed data was retained")
+
+
+def verify_purge_endpoint(url: str) -> None:
+    endpoint = urlsplit(url)
+    if endpoint.hostname not in {"127.0.0.1", "localhost"} or endpoint.path not in {"", "/"}:
+        raise ValueError("Stream purge requires the local Compose OpenSearch endpoint")
+    published = subprocess.check_output(
+        ["docker", "compose", "port", "opensearch", "9200"], cwd=REPO_ROOT, text=True,
+    ).strip()
+    if published != f"127.0.0.1:{endpoint.port or 443}":
+        raise ValueError("OPENSEARCH_URL does not match the local Compose OpenSearch port")
+
+
 def setup_customer(customers: dict[str, Customer]) -> bool:
     name = ask("Customer name: ", lambda answer: customer_name(answer, customers))
     slug = ask("Customer slug: ", customer_slug)
@@ -550,10 +709,17 @@ def setup_customer(customers: dict[str, Customer]) -> bool:
 
 
 def main() -> int:
+    deletion = None
     try:
         customers = load_customers()
         customer = select_customer(customers)
-        changed = setup_customer(customers) if customer is None else edit_customer(customer, customers)
+        if customer is None:
+            changed = setup_customer(customers)
+        elif ask("Action [Edit/Delete]: ", customer_action) == "delete":
+            deletion = delete_customer(customer)
+            changed = deletion is not None
+        else:
+            changed = edit_customer(customer, customers)
         if not changed:
             return 0
     except (EOFError, KeyboardInterrupt):
@@ -564,12 +730,24 @@ def main() -> int:
         return 1
 
     try:
-        deploy_customer()
+        env = deploy_customer()
+        if deletion is not None and deletion[0]:
+            streams, credential_ids = deletion
+            if env is None:
+                print("Indexed data was retained because deployment was skipped. "
+                      "The deleted customer is now archived and no longer appears in the selector.")
+            else:
+                from lib.customer_stream_purge import purge_customer_streams
+
+                with lock_customers():
+                    verify_purge_endpoint(env["OPENSEARCH_URL"])
+                    verify_receiver_revoked(customer.slug, credential_ids, streams)
+                    purge_customer_streams(env, streams, confirm)
     except (EOFError, KeyboardInterrupt):
         print("\nDeployment interrupted. The wizard changes are saved. "
               "Review the last deployment step before retrying.", file=sys.stderr)
         return 130
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, subprocess.CalledProcessError, yaml.YAMLError) as error:
         print(f"Deployment stopped: {error}", file=sys.stderr)
         print("The wizard changes are saved. Review the deployment output before retrying.",
               file=sys.stderr)

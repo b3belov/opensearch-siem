@@ -294,7 +294,7 @@ exported `RELAY_CENTRAL_URL`.
 From the repository root, run the wizard with the GitOps Python environment:
 
 ```bash
-.venv/bin/python scripts/onboard-customer.py
+.venv/bin/python scripts/manage-customers.py
 ```
 
 The wizard shows a numbered list of existing customers by name and slug, plus
@@ -304,11 +304,16 @@ a **New** option.
   and path to the public ingest CA certificate.
   Review and confirm to create a `generic-syslog` source and a `<slug>-primary`
   credential.
-- Select an existing customer to edit its name and relay egress CIDRs. Press
+- Select an existing customer and choose **Edit** to change its name and relay
+  egress CIDRs. Press
   Enter at either prompt to keep the current value. To regenerate the forwarder
   ledger, supply the public ingest CA path and review the configured URL. The
   generator uses the first enabled credential and the enabled syslog sources.
   Editing preserves the customer's slug, credentials, password, and sources.
+- Choose **Delete** to remove the customer's desired configuration. The wizard
+  asks separately about removing local credential files and the forwarder
+  ledger. It keeps both by default and requires you to type the exact customer
+  slug before removing anything.
 
 Invalid answers, such as a malformed CIDR or a name already used by another
 customer, repeat the same prompt. Name matching ignores case and differences in
@@ -338,7 +343,7 @@ admin settings before starting the wizard:
 set -a
 . ./.env
 set +a
-.venv/bin/python scripts/onboard-customer.py
+.venv/bin/python scripts/manage-customers.py
 ```
 
 For other deployments, export `OPENSEARCH_URL`, `OPENSEARCH_USER`,
@@ -348,6 +353,25 @@ confirmation. It publishes the live rendered files, reconciles the entire
 GitOps desired state, and restarts `central-logstash` and `ingest-edge`, which
 can briefly interrupt ingestion for all customers. If you skip deployment,
 use the [GitOps change flow](#gitops-change-flow) before sending relay traffic.
+
+### Delete a customer
+
+The wizard archives the removed configuration under
+`tmp/customer-deletions/<slug>/`. This ignored local archive also blocks
+accidental reuse of the slug in the same checkout. Deleting the bundled
+`acme` customer can make repository checks that expect that example fail.
+
+Apply the deployment preview to revoke the customer's receiver access.
+Indexed data stays in OpenSearch under its normal retention settings by
+default. Permanent deletion requires the local Compose OpenSearch endpoint.
+If you opt in, the wizard waits for a successful receiver update and a
+healthy receiver, then lists the exact
+verified customer streams and asks for separate confirmation. It deletes
+those streams by exact name. Historical streams outside that list and
+obsolete OpenSearch templates may require separate review. If you skip or
+interrupt deployment or purge, the archived customer no longer appears in
+the selector. Review the deployment status and remaining streams before
+attempting any further cleanup.
 
 ## Customer Relay Bundles
 

@@ -1,3 +1,4 @@
+{% if customers %}
 customers:
 {% for customer in customers %}
   {{ customer.slug }}:
@@ -7,3 +8,6 @@ customers:
       - {{ credential_id }}
 {% endfor %}
 {% endfor %}
+{% else %}
+customers: {}
+{% endif %}

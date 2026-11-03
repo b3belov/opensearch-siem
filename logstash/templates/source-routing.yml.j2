@@ -1,3 +1,4 @@
+{% if sources %}
 sources:
 {% for source in sources %}
   {{ source.customer }}:{{ source.id }}:
@@ -11,3 +12,6 @@ sources:
     priority: {{ source.priority }}
     enabled: {{ source.enabled | lower }}
 {% endfor %}
+{% else %}
+sources: {}
+{% endif %}
