@@ -194,12 +194,22 @@ def onboard(name: str, slug: str, cidrs: list[str], url: str, ca: str) -> None:
     customer = CUSTOMERS / slug
     secret = REPO_ROOT / "secrets/local" / f"customer-{slug}-password"
     handoff = REPO_ROOT / "relay/bundles" / slug
+    archive = DELETIONS / slug
+    history_path = None
 
     with lock_customers():
         customer_slug(slug)
-        for path in (customer, secret, handoff):
-            if path.exists() or path.is_symlink():
+        reuse = completed_archive(archive)
+        ledger_path = handoff / LEDGER_FILENAME
+        for path in (customer, secret, ledger_path if reuse else handoff):
+            if os.path.lexists(path):
                 raise ValueError(f"Path already exists: {path.relative_to(REPO_ROOT)}")
+        if reuse:
+            if os.path.lexists(handoff) and (handoff.is_symlink() or not handoff.is_dir()):
+                raise ValueError("Expected a regular forwarder bundle directory")
+            references = {item["secretRef"] for item in read_customer_credentials(archive)}
+            if any(os.path.lexists(path) for path in unshared_customer_secrets(slug, references)):
+                raise ValueError("A password file from the previous customer still exists")
         customer_name(name, load_customers())
 
         staging_root = REPO_ROOT / "tmp"
@@ -221,15 +231,31 @@ def onboard(name: str, slug: str, cidrs: list[str], url: str, ca: str) -> None:
             secret.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             handoff.parent.mkdir(parents=True, exist_ok=True)
             with ExitStack() as rollback:
-                handoff.mkdir(mode=0o700)
-                rollback.callback(shutil.rmtree, handoff)
-                shutil.move(ledger, handoff / LEDGER_FILENAME)
+                if not handoff.exists():
+                    handoff.mkdir(mode=0o700)
+                    rollback.callback(handoff.rmdir)
+                ledger_fd = os.open(ledger_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                rollback.callback(ledger_path.unlink)
+                with os.fdopen(ledger_fd, "wb") as destination, ledger.open("rb") as source:
+                    shutil.copyfileobj(source, destination)
 
                 fd = os.open(secret, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 rollback.callback(secret.unlink)
                 with os.fdopen(fd, "w", encoding="ascii") as password_file:
                     os.fchmod(password_file.fileno(), 0o600)
                     password_file.write(secrets.token_urlsafe(32) + "\n")
+
+                if reuse:
+                    history = DELETIONS / "history"
+                    if history.is_symlink():
+                        raise ValueError("Customer archive history must not be a symbolic link")
+                    history.mkdir(mode=0o700, exist_ok=True)
+                    entry = history / f"{slug}-{secrets.token_hex(8)}"
+                    entry.mkdir(mode=0o700)
+                    rollback.callback(entry.rmdir)
+                    history_path = entry / slug
+                    archive.rename(history_path)
+                    rollback.callback(history_path.rename, archive)
 
                 # Publish the complete customer directory last.
                 if customer.exists() or customer.is_symlink():
@@ -238,7 +264,8 @@ def onboard(name: str, slug: str, cidrs: list[str], url: str, ca: str) -> None:
                 rollback.pop_all()
 
     print(f"\nCustomer configuration written to {customer.relative_to(REPO_ROOT)}")
-    ledger_path = handoff / LEDGER_FILENAME
+    if history_path is not None:
+        print(f"Previous customer archive kept at {history_path.relative_to(REPO_ROOT)}.")
     print(f"Share the password separately from {secret.relative_to(REPO_ROOT)}.")
     print("If the central host uses another checkout, securely install the same password")
     print("file there at that path with mode 0600 before deploying the GitOps change.")
@@ -368,14 +395,26 @@ def customer_name(answer: str, customers: dict[str, Customer], current_slug: str
     return answer
 
 
+def completed_archive(directory: Path) -> bool:
+    marker = directory / CLEANUP_COMPLETE
+    return (
+        not DELETIONS.is_symlink()
+        and not directory.is_symlink()
+        and directory.is_dir()
+        and not marker.is_symlink()
+        and marker.is_file()
+    )
+
+
 def customer_slug(answer: str) -> str:
     if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}[a-z0-9]", answer):
         raise ValueError("Slug must be 3–32 lowercase letters, digits or hyphens, "
                          "start with a letter and end with a letter or digit")
     if os.path.lexists(CUSTOMERS / answer):
         raise ValueError("Customer slug already exists")
-    if os.path.lexists(DELETIONS / answer):
-        raise ValueError("Customer slug is archived in this checkout and may still own indexed data")
+    archive = DELETIONS / answer
+    if os.path.lexists(archive) and not completed_archive(archive):
+        raise ValueError("Customer slug is archived with removal still pending. Use Resume removal")
     return answer
 
 
@@ -786,8 +825,7 @@ def archived_customers() -> dict[str, Customer]:
     for path in sorted(DELETIONS.glob("*/customer.yml")):
         if path.is_symlink() or path.parent.is_symlink():
             continue
-        marker = path.with_name(CLEANUP_COMPLETE)
-        if marker.is_file() and not marker.is_symlink():
+        if completed_archive(path.parent):
             continue
         document = read_yaml(path)
         validate_schema(document, "customer.schema.json", path)
@@ -962,7 +1000,7 @@ def resume_removal() -> None:
             if not remaining_rendered_files(slug, streams):
                 marker = customer.path.with_name(CLEANUP_COMPLETE)
                 with marker.open("x", encoding="utf-8") as completion:
-                    completion.write("Verified customer cleanup complete. Keep this archive to reserve the slug.\n")
+                    completion.write("Verified customer cleanup complete. This slug can be reused.\n")
                 print(f"Removal complete for {slug}. It will no longer appear under Resume removal.")
 
 
@@ -974,6 +1012,8 @@ def setup_customer(customers: dict[str, Customer]) -> bool:
     ca_path, ca = ask(f"Public ingest CA path [{DEFAULT_CA}]: ", ingest_ca)
 
     print(f"\nCustomer {name} ({slug})")
+    if completed_archive(DELETIONS / slug):
+        print("Previous removal is complete. Reusing this slug creates a new forwarder password.")
     print(f"Source {SOURCE_ID} with standard-7d retention")
     print(f"Credential {slug}-primary")
     print(f"Allowed relay networks {', '.join(cidrs)}")

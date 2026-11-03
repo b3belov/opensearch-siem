@@ -350,8 +350,8 @@ use the [GitOps change flow](#gitops-change-flow) before sending relay traffic.
 ### Delete a customer
 
 The wizard archives the removed configuration under
-`tmp/customer-deletions/<slug>/`. This ignored local archive also blocks
-accidental reuse of the slug in the same checkout. Deleting the bundled
+`tmp/customer-deletions/<slug>/`. This ignored local archive blocks
+reuse of the slug in the same checkout until removal is verified complete. Deleting the bundled
 `acme` customer can make repository checks that expect that example fail.
 
 Apply the deployment preview to revoke the customer's receiver access.
@@ -400,7 +400,9 @@ objects outside the archive's configuration may require separate review.
 
 Resume removal requires an existing local archive. After the wizard verifies
 that local cleanup and OpenSearch cleanup are complete, the customer drops
-out of the resume list. The archive stays in place to reserve the slug.
+out of the resume list and its slug becomes available again. Onboarding with
+that slug creates a new password and moves the previous archive into
+`tmp/customer-deletions/history/`.
 
 ## Customer Relay Bundles
 
