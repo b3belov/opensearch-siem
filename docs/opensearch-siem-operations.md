@@ -46,7 +46,7 @@ Customer streams use readable slugs, for example `logs-acme-firewall`. Customer 
 
 ## Ingest Edge TLS And IP Allowlists
 
-Customer relays send HTTPS traffic to the central ingest edge on TCP 5044. The ingest edge mounts `secrets/certs/central.crt` and `secrets/certs/central.key`.
+Customer relays send HTTPS traffic to the central ingest edge on TCP `5044` by default. Set `INGEST_EDGE_PORT` in `.env` to change the listener and published port, and update the relay endpoints and firewall rules accordingly. The ingest edge mounts `secrets/certs/central.crt` and `secrets/certs/central.key`.
 
 IP allowlisting must be enforced where the real customer source IP is visible. The preferred version-one deployment enforces customer allowlists at the host firewall before traffic reaches Docker. If a trusted reverse proxy sits in front of `ingest-edge`, set `TRUSTED_PROXY_CIDRS` to the proxy CIDR only; `ingest-edge` then accepts `X-Forwarded-For` only from those proxy addresses. Do not accept `X-Forwarded-For` directly from the public internet.
 

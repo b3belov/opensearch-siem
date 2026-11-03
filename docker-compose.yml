@@ -158,6 +158,7 @@ services:
     restart: unless-stopped
     environment:
       - LOGSTASH_URL=http://central-logstash:9601
+      - INGEST_EDGE_PORT=${INGEST_EDGE_PORT:-5044}
       - INGEST_EDGE_CONFIG=/app/config/customer-auth.yml
       - INGEST_EDGE_SECRET_ROOT=/run/siem-secrets
       - INGEST_EDGE_TLS_CERT=/run/siem-certs/central.crt
@@ -170,14 +171,20 @@ services:
       - ./secrets/local:/run/siem-secrets:ro
       - ./secrets/certs:/run/siem-certs:ro
     ports:
-      - "5044:5044/tcp"
+      - "${INGEST_EDGE_PORT:-5044}:${INGEST_EDGE_PORT:-5044}/tcp"
     networks:
       - siem-net
     depends_on:
       central-logstash:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import ssl,urllib.request; urllib.request.urlopen('https://localhost:5044/health', context=ssl._create_unverified_context())\""]
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os, ssl, urllib.request;
+          urllib.request.urlopen('https://localhost:' + os.environ['INGEST_EDGE_PORT'] + '/health', context=ssl._create_unverified_context())
       interval: 20s
       timeout: 10s
       retries: 6

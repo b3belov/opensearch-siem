@@ -24,7 +24,7 @@ The default Compose stack starts these central services:
 - `central-logstash`: persistent-queue Logstash pipeline that accepts events from
   the ingest edge, validates source metadata, routes events, and writes to
   OpenSearch.
-- `ingest-edge`: HTTPS listener on TCP `5044` that authenticates customer relay
+- `ingest-edge`: HTTPS listener (TCP `5044` by default) that authenticates customer relay
   credentials, enforces CIDR allowlists, injects trusted customer metadata, and
   forwards accepted JSON events to Logstash.
 - `backup-job`: optional backup profile for repository and OpenSearch snapshot
@@ -220,7 +220,12 @@ Open local services:
 
 - OpenSearch API: `https://127.0.0.1:9200`
 - OpenSearch Dashboards: `https://localhost`
-- Ingest edge: `https://<host>:5044`
+- Ingest edge: `https://<host>:5044` by default
+
+Set `INGEST_EDGE_PORT` in `.env` to change both the listener and published TCP
+port, then run `docker compose up -d ingest-edge` to apply it. Update the host
+firewall and relay endpoints to use the new port. Set `RELAY_CENTRAL_URL` to the
+reachable HTTPS endpoint before generating relay bundles.
 
 Dashboards uses the OpenSearch `admin` user. The password is the value of
 `OPENSEARCH_ADMIN_PASSWORD` in `.env`.
@@ -479,8 +484,10 @@ The reconciler emits structured log lines with timestamps and levels:
 
 ### Check ingest-edge health
 
+Load `.env` or set `INGEST_EDGE_PORT` in your shell if you use a custom port.
+
 ```bash
-curl --cacert secrets/certs/central-ca.crt https://127.0.0.1:5044/health
+curl --cacert secrets/certs/central-ca.crt "https://127.0.0.1:${INGEST_EDGE_PORT:-5044}/health"
 ```
 
 Returns `{"status":"ok"}` when the listener is up. Used by the container healthcheck.
@@ -559,8 +566,8 @@ Then proceed with the reconciler and remaining service startup as normal.
 
 - Keep OpenSearch and Dashboards bound to localhost unless a trusted reverse
   proxy or VPN is in front of them.
-- Protect TCP `5044` with host firewall rules. The app-level customer CIDR
-  allowlist is an additional control, not a replacement for network policy.
+- Protect the ingest edge port (`5044` by default) with host firewall rules.
+  The app-level customer CIDR allowlist adds another layer of protection.
 - Set `TRUSTED_PROXY_CIDRS` only to CIDRs of reverse proxies you control. The
   ingest edge trusts `X-Forwarded-For` only from those proxy addresses.
 - Customer identity is assigned from the authenticated credential mapping, not
