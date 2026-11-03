@@ -66,8 +66,11 @@ cp scripts/setup-local-secrets.sh "$tmp_dir/scripts/setup-local-secrets.sh"
   test -f secrets/certs/dashboards-proxy.key
   assert_mode 600 secrets/certs/dashboards.key
   assert_mode 644 secrets/certs/dashboards.crt
-  assert_mode 600 secrets/certs/dashboards-proxy.key
+  assert_mode 644 secrets/certs/dashboards-proxy.key
   assert_mode 644 secrets/certs/dashboards-proxy.crt
+  chmod 600 secrets/certs/dashboards-proxy.key
+  bash scripts/setup-local-secrets.sh >/dev/null
+  assert_mode 644 secrets/certs/dashboards-proxy.key
 )
 
 echo "local env checks passed"

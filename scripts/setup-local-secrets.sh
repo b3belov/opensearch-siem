@@ -79,9 +79,10 @@ if [[ ! -f secrets/certs/dashboards-proxy.key || ! -f secrets/certs/dashboards-p
     -out secrets/certs/dashboards-proxy.crt -days 825 \
     -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1")
   rm -f secrets/certs/dashboards-proxy.csr
-  chmod 600 secrets/certs/dashboards-proxy.key
+  chmod 644 secrets/certs/dashboards-proxy.key
   chmod 644 secrets/certs/dashboards-proxy.crt
 fi
+chmod 644 secrets/certs/dashboards-proxy.key
 
 # v1 single-node: OpenSearch matches the admin client cert by DN (CN=admin)
 # only, so no extendedKeyUsage/keyUsage extensions are required. A multi-node
